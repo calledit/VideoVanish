@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-# videovanish.py — keyframes by FRAME INDEX (not ms) + enforced FPS via metadata
+# videovanish.py — frame-indexed keyframes + object labels per annotation
 #
-# What changed vs your last version:
-# - Keyframes are now stored by frame index: Keyframe.frame_idx (int).
-# - We compute the current frame index from decoded master frames using FPS.
-# - FPS is read from QMediaMetaData(VideoFrameRate) when media loads.
-#   If absent/invalid => we raise ValueError (as requested).
-# - JSON now saves {"frame_idx": ...} (and stores "fps" for reference).
-# - Keyframe list, overlay binding, save/load, and seeking from keyframes
-#   all use frame indices. Slider remains time-based for playback ergonomics,
-#   but annotations/logic are tied to frames, not timestamps.
+# New in this version:
+# - Object selector (Object 1..N) above annotation tools + "Add Object" button.
+# - Each positive/negative click and rectangle stores & shows an object number.
+# - Object numbers are drawn next to annotations (viewer & thumbnails).
+# - JSON now includes 'obj' for each annotation; old JSON (without obj) loads as obj=1.
 #
-# Still included:
+# Retained:
 # - Dark editor-style UI.
-# - Master/original video (with audio) + optional infilled + optional mask.
-# - Followers play while master plays, with periodic drift correction,
-#   and exact snapping on pause/seek/stop.
+# - Master/original video with audio + optional infilled + optional mask.
+# - Followers PLAY during playback, with periodic drift correction; exact snap on pause/seek.
+# - Frame-accurate UI via master QVideoSink; keyframes stored by frame index.
 # - Poster frame shows immediately on load (frame 0).
-# - Overlay with pos/neg dots, rectangles, live-rect preview.
-# - Keyframe thumbnails with annotations drawn on them.
-# - Clickable seek slider that jumps to a position.
+# - Clickable seek slider; keyframe thumbnail annotations.
 
 import sys, json, argparse
 from dataclasses import dataclass, field
@@ -27,13 +21,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QSize, QPointF, QRectF, Signal, QTimer, QUrl
-from PySide6.QtGui import QAction, QIcon, QPainter, QPen, QColor, QPixmap, QPalette
+from PySide6.QtGui import QAction, QIcon, QPainter, QPen, QColor, QPixmap, QPalette, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QLabel, QFileDialog, QPushButton, QDockWidget, QStyle,
     QToolBar, QMessageBox, QListWidget, QListWidgetItem, QButtonGroup,
     QToolButton, QGraphicsView, QGraphicsScene, QGraphicsObject, QFrame,
-    QCheckBox, QRadioButton, QGroupBox
+    QCheckBox, QRadioButton, QGroupBox, QComboBox
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -58,9 +52,11 @@ def frame_to_ms(fi: int, fps: float) -> int:
 @dataclass
 class Keyframe:
     frame_idx: int
-    pos_clicks: List[Tuple[float, float]] = field(default_factory=list)   # normalized [0..1]
-    neg_clicks: List[Tuple[float, float]] = field(default_factory=list)
-    rects: List[Tuple[float, float, float, float]] = field(default_factory=list)  # (x,y,w,h) normalized
+    # Each point: (x_norm, y_norm, obj_id)
+    pos_clicks: List[Tuple[float, float, int]] = field(default_factory=list)
+    neg_clicks: List[Tuple[float, float, int]] = field(default_factory=list)
+    # Each rect: (x_norm, y_norm, w_norm, h_norm, obj_id)
+    rects: List[Tuple[float, float, float, float, int]] = field(default_factory=list)
 
 
 # ---------- Overlay for drawing points/rectangles ----------
@@ -83,7 +79,7 @@ class OverlayItem(QGraphicsObject):
         self._drag_start: Optional[QPointF] = None
         self._drag_cur: Optional[QPointF] = None
 
-        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
         self.setAcceptHoverEvents(True)
         self.setFlag(self.GraphicsItemFlag.ItemIsFocusable, True)
         self.setZValue(20.0)
@@ -91,6 +87,12 @@ class OverlayItem(QGraphicsObject):
         self.dot_radius_px = 10.0
         self.rect_pen_width = 4.0
         self.live_rect_pen_width = 3.0
+
+        # Label styling
+        self.label_font = QFont()
+        self.label_font.setPointSize(9)
+        self.label_pen = QPen(QColor(0, 0, 0, 220), 3)  # outline
+        self.label_color = QColor(255, 255, 255, 230)
 
     def setTool(self, tool: int): self._tool = tool
     def setKeyframe(self, kf: Optional[Keyframe]): self._kf = kf; self.update()
@@ -102,6 +104,16 @@ class OverlayItem(QGraphicsObject):
             self.update()
 
     def boundingRect(self) -> QRectF: return QRectF(self._rect)
+
+    def _draw_label(self, p: QPainter, x: float, y: float, text: str):
+        # draw outlined text without altering brush/pen state for later shapes
+        p.save()
+        p.setFont(self.label_font)
+        p.setPen(self.label_pen)           # outline
+        p.drawText(x + 1, y + 1, text)
+        p.setPen(self.label_color)         # fill
+        p.drawText(x, y, text)
+        p.restore()
 
     def paint(self, p: QPainter, _opt, _widget=None):
         p.setRenderHint(QPainter.Antialiasing, True)
@@ -117,36 +129,56 @@ class OverlayItem(QGraphicsObject):
         if self._kf:
             W = max(1.0, self._rect.width()); H = max(1.0, self._rect.height())
 
-            # Rectangles (cyan)
+            # Rectangles (cyan) + object label
             p.setPen(QPen(QColor(0, 200, 255, 220), self.rect_pen_width))
             p.setBrush(Qt.NoBrush)
-            for (nx, ny, nw, nh) in self._kf.rects:
+            for (nx, ny, nw, nh, obj) in self._kf.rects:
                 x = self._rect.left() + nx * W
                 y = self._rect.top()  + ny * H
-                p.drawRect(QRectF(x, y, nw * W, nh * H))
+                w = nw * W; h = nh * H
+                p.drawRect(QRectF(x, y, w, h))
+                self._draw_label(p, x + w + 4, y + 12, f"{obj}")
 
-            # Dots
+            # Dots: positive = green; negative = red; with object labels
             r_px = self.dot_radius_px
             p.setPen(Qt.NoPen)
+
             p.setBrush(QColor(55, 200, 90, 235))  # positive
-            for (nx, ny) in self._kf.pos_clicks:
-                p.drawEllipse(QPointF(self._rect.left()+nx*W, self._rect.top()+ny*H), r_px, r_px)
+            for (nx, ny, obj) in self._kf.pos_clicks:
+                cx = self._rect.left()+nx*W; cy = self._rect.top()+ny*H
+                p.drawEllipse(QPointF(cx, cy), r_px, r_px)
+                self._draw_label(p, cx + r_px + 3, cy + 4, f"{obj}")
 
             p.setBrush(QColor(230, 70, 70, 235))  # negative
-            for (nx, ny) in self._kf.neg_clicks:
-                p.drawEllipse(QPointF(self._rect.left()+nx*W, self._rect.top()+ny*H), r_px, r_px)
+            for (nx, ny, obj) in self._kf.neg_clicks:
+                cx = self._rect.left()+nx*W; cy = self._rect.top()+ny*H
+                p.drawEllipse(QPointF(cx, cy), r_px, r_px)
+                self._draw_label(p, cx + r_px + 3, cy + 4, f"{obj}")
 
     # Mouse handling
     def mousePressEvent(self, e):
+        if e.button() == Qt.RightButton:
+            # right-click = delete nearest point or rect edge
+            nx, ny = self._normalize_point(e.pos())
+            self.requestDelete.emit(nx, ny)
+            e.accept()
+            return
+
         if e.button() == Qt.LeftButton:
-            if e.modifiers() & Qt.ControlModifier:
-                nx, ny = self._normalize_point(e.pos()); self.requestDelete.emit(nx, ny); e.accept(); return
             if self._tool == self.TOOL_RECT:
-                self._drawing = True; self._drag_start = e.pos(); self._drag_cur = self._drag_start; self.update()
+                self._drawing = True
+                self._drag_start = e.pos()
+                self._drag_cur = self._drag_start
+                self.update()
             else:
                 nx, ny = self._normalize_point(e.pos())
-                (self.addPositive if self._tool == self.TOOL_POS else self.addNegative).emit(nx, ny)
-            e.accept(); return
+                if self._tool == self.TOOL_POS:
+                    self.addPositive.emit(nx, ny)
+                else:
+                    self.addNegative.emit(nx, ny)
+            e.accept()
+            return
+
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
@@ -237,32 +269,50 @@ class VideoView(QGraphicsView):
         self.overlay_item.setRect(target)
         self.scene_.setSceneRect(QRectF(0, 0, view_rect.width(), view_rect.height()))
 
-    # Thumbnails with overlay painted onto grabbed viewport
+    # Thumbnails with overlay painted
     def _draw_annotations_on_pixmap(self, pix: QPixmap, kf: Optional[Keyframe]) -> QPixmap:
         if pix.isNull() or not kf: return pix
         p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing, True)
+
+        # label style
+        font = QFont(); font.setPointSize(8)
+        outline_pen = QPen(QColor(0,0,0,220), 2)
+        text_color = QColor(255,255,255,230)
+
         rect = self.overlay_item.boundingRect()
         vw = self.viewport().width(); vh = self.viewport().height()
         if vw <= 0 or vh <= 0: return pix
         sx = pix.width() / vw; sy = pix.height() / vh
 
+        # Rectangles
         p.setPen(QPen(QColor(0, 200, 255, 220), 2)); p.setBrush(Qt.NoBrush)
-        for (nx, ny, nw, nh) in kf.rects:
+        for (nx, ny, nw, nh, obj) in kf.rects:
             x = (rect.left() + nx * rect.width()) * sx
             y = (rect.top()  + ny * rect.height()) * sy
             w = (nw * rect.width()) * sx; h = (nh * rect.height()) * sy
             p.drawRect(QRectF(x, y, w, h))
+            p.setFont(font); p.setPen(outline_pen); p.drawText(x + w + 3, y + 10, f"{obj}")
+            p.setPen(text_color); p.drawText(x + w + 2, y + 9, f"{obj}")
 
-        r_px = 6.0; p.setPen(Qt.NoPen); p.setBrush(QColor(55, 200, 90, 235))
-        for (nx, ny) in kf.pos_clicks:
+        # Dots
+        r_px = 5.0; p.setPen(Qt.NoPen); 
+        # Positive
+        p.setBrush(QColor(55, 200, 90, 235))
+        for (nx, ny, obj) in kf.pos_clicks:
             x = (rect.left() + nx * rect.width()) * sx
             y = (rect.top()  + ny * rect.height()) * sy
             p.drawEllipse(QPointF(x, y), r_px, r_px)
+            p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
+            p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+        # Negative
         p.setBrush(QColor(230, 70, 70, 235))
-        for (nx, ny) in kf.neg_clicks:
+        for (nx, ny, obj) in kf.neg_clicks:
             x = (rect.left() + nx * rect.width()) * sx
             y = (rect.top()  + ny * rect.height()) * sy
             p.drawEllipse(QPointF(x, y), r_px, r_px)
+            p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
+            p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+
         p.end(); return pix
 
     def grabThumbWithOverlay(self, kf: Optional[Keyframe], size: QSize) -> Optional[QIcon]:
@@ -287,7 +337,7 @@ class SeekSlider(QSlider):
 
 # ---------- Core Player ----------
 class VideoPlayer(QWidget):
-    positionChanged = Signal(int)  # still ms-based for UI
+    positionChanged = Signal(int)  # ms for UI
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -320,7 +370,7 @@ class VideoPlayer(QWidget):
         # Time/frame tracking
         self._last_frame_ms: int = 0
         self._last_frame_idx: int = 0
-        self._fps: Optional[float] = None  # will be enforced from metadata
+        self._fps: Optional[float] = None  # enforced from metadata
 
         # Playback resync
         self.resync_interval_ms = 120
@@ -331,6 +381,9 @@ class VideoPlayer(QWidget):
         # Mode
         self.show_mode = "original"
         self.view.set_base_visible("original")
+
+        # Current object selection (1-based)
+        self.current_object: int = 1
 
         # Keyframe bar
         self.kf_list = QListWidget(); self.kf_list.setFlow(QListWidget.LeftToRight); self.kf_list.setWrapping(False)
@@ -375,6 +428,11 @@ class VideoPlayer(QWidget):
         # Annotation store: keyed by frame index
         self.keyframes: Dict[int, Keyframe] = {}
         self._pending_icon_updates: set[int] = set()
+
+    # Object selection API
+    def set_current_object(self, obj_id: int):
+        if obj_id >= 1:
+            self.current_object = obj_id
 
     # Public API
     def load_original(self, path: str):
@@ -448,17 +506,14 @@ class VideoPlayer(QWidget):
         self.player_orig.stop(); self.player_infill.stop(); self.mask_player.stop()
 
     def seek(self, pos_ms: int):
-        # Move master & followers immediately
         self.player_orig.setPosition(pos_ms)
         if self.show_mode == "infilled": self.player_infill.setPosition(pos_ms)
         if self.view.mask_item.isVisible(): self.mask_player.setPosition(pos_ms)
 
-        # UI/overlay refresh immediately
         self._last_frame_ms = pos_ms
         if not self._slider_down: self.pos_slider.setValue(pos_ms)
         self.time_label.setText(f"{fmt_ms(pos_ms)} / {fmt_ms(self.player_orig.duration() or 0)}")
 
-        # Also update current frame index (requires fps)
         if self._fps is not None and self._fps > 0:
             self._last_frame_idx = ms_to_frame(pos_ms, self._fps)
             self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
@@ -475,7 +530,6 @@ class VideoPlayer(QWidget):
         pos_ms = int(ts_us // 1000) if (ts_us is not None and ts_us >= 0) else self.player_orig.position()
         self._last_frame_ms = pos_ms
 
-        # Convert to frame index (requires fps to be known; enforced on load)
         if self._fps is not None and self._fps > 0:
             self._last_frame_idx = ms_to_frame(pos_ms, self._fps)
 
@@ -483,7 +537,6 @@ class VideoPlayer(QWidget):
             self.pos_slider.setValue(pos_ms)
             self.time_label.setText(f"{fmt_ms(pos_ms)} / {fmt_ms(self.player_orig.duration() or 0)}")
 
-        # Bind overlay to current frame's keyframe (if any)
         self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
 
     # Periodic resync while playing
@@ -502,7 +555,6 @@ class VideoPlayer(QWidget):
         if self.show_mode == "infilled": self.player_infill.setPosition(pos_ms)
         if self.view.mask_item.isVisible(): self.mask_player.setPosition(pos_ms)
 
-        # Update frame index & overlay after snap
         if self._fps is not None and self._fps > 0:
             self._last_frame_idx = ms_to_frame(pos_ms, self._fps)
             self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
@@ -517,10 +569,9 @@ class VideoPlayer(QWidget):
         if self._poster_ready: return
         if status in (getattr(QMediaPlayer, "LoadedMedia", None),
                       getattr(QMediaPlayer, "BufferedMedia", None)):
-            # 1) Enforce FPS from metadata
+            # enforce FPS from metadata
             if self._fps is None:
                 fps = self.player_orig.metaData().value(QMediaMetaData.VideoFrameRate)
-                # Expected: a number (float-ish). Validate.
                 if fps is None:
                     raise ValueError("Video FPS could not be determined from metadata. Re-encode or provide valid FPS.")
                 try:
@@ -532,7 +583,6 @@ class VideoPlayer(QWidget):
                 self._fps = fps_val
                 print(f"[INFO] FPS (metadata): {self._fps:.3f}")
 
-            # 2) Poster frame (if not playing yet)
             if self.player_orig.playbackState() != QMediaPlayer.PlayingState:
                 QTimer.singleShot(0, self._show_first_master_frame)
 
@@ -552,7 +602,6 @@ class VideoPlayer(QWidget):
             self._last_frame_idx = 0
             self.view.overlay_item.setKeyframe(self.keyframes.get(0))
 
-        # Followers at t=0 paused
         if self.show_mode == "infilled":
             self.player_infill.pause(); self.player_infill.setPosition(0)
         if self.view.mask_item.isVisible():
@@ -594,13 +643,12 @@ class VideoPlayer(QWidget):
     def _add_kf_chip(self, kf: Keyframe, with_icon: bool = True):
         fi = kf.frame_idx
         if self._find_kf_item_by_frame(fi) is not None: return
-        # Insert sorted by frame idx
         insert_row = self.kf_list.count()
         for row in range(self.kf_list.count()):
             it = self.kf_list.item(row); t = it.data(Qt.UserRole)
             if t is not None and fi < t: insert_row = row; break
 
-        # Display label as time from frame index (needs fps)
+        # label with time if fps known, else frame #
         label = f"#{fi}"
         if self._fps: label = f"{fmt_ms(frame_to_ms(fi, self._fps))}"
         item = QListWidgetItem(label)
@@ -639,21 +687,21 @@ class VideoPlayer(QWidget):
         else:
             self._ensure_icon_for_frame(kf.frame_idx)
 
-    # Annotation slots (by frame)
+    # Annotation slots (by frame) — now include object id
     def _on_add_positive(self, nx: float, ny: float):
-        kf = self._get_or_make_kf(); kf.pos_clicks.append((nx, ny))
+        kf = self._get_or_make_kf(); kf.pos_clicks.append((nx, ny, self.current_object))
         self.view.overlay_item.setKeyframe(kf); self._ensure_icon_for_frame(kf.frame_idx)
-        print(f"[KF frame {kf.frame_idx}] +POS ({nx:.3f},{ny:.3f})")
+        print(f"[KF frame {kf.frame_idx}] +POS obj={self.current_object} ({nx:.3f},{ny:.3f})")
 
     def _on_add_negative(self, nx: float, ny: float):
-        kf = self._get_or_make_kf(); kf.neg_clicks.append((nx, ny))
+        kf = self._get_or_make_kf(); kf.neg_clicks.append((nx, ny, self.current_object))
         self.view.overlay_item.setKeyframe(kf); self._ensure_icon_for_frame(kf.frame_idx)
-        print(f"[KF frame {kf.frame_idx}] -NEG ({nx:.3f},{ny:.3f})")
+        print(f"[KF frame {kf.frame_idx}] -NEG obj={self.current_object} ({nx:.3f},{ny:.3f})")
 
     def _on_add_rect(self, nx: float, ny: float, nw: float, nh: float):
-        kf = self._get_or_make_kf(); kf.rects.append((nx, ny, nw, nh))
+        kf = self._get_or_make_kf(); kf.rects.append((nx, ny, nw, nh, self.current_object))
         self.view.overlay_item.setKeyframe(kf); self._ensure_icon_for_frame(kf.frame_idx)
-        print(f"[KF frame {kf.frame_idx}] RECT ({nx:.3f},{ny:.3f},{nw:.3f},{nh:.3f})")
+        print(f"[KF frame {kf.frame_idx}] RECT obj={self.current_object} ({nx:.3f},{ny:.3f},{nw:.3f},{nh:.3f})")
 
     def _on_delete_at(self, nx: float, ny: float):
         fi = self._current_frame_idx(); kf = self.keyframes.get(fi)
@@ -661,7 +709,7 @@ class VideoPlayer(QWidget):
         rect = self.view.overlay_item.boundingRect()
         W = max(1.0, rect.width()); H = max(1.0, rect.height()); R_px = 8.0
         def pop_near_point(points):
-            for i, (px, py) in enumerate(points):
+            for i, (px, py, pobj) in enumerate(points):
                 dx = abs(nx - px) * W; dy = abs(ny - py) * H
                 if (dx*dx + dy*dy) ** 0.5 <= R_px: points.pop(i); return True
             return False
@@ -669,7 +717,7 @@ class VideoPlayer(QWidget):
             print(f"[KF frame {kf.frame_idx}] deleted point near ({nx:.3f},{ny:.3f})")
             self.view.overlay_item.setKeyframe(kf); self._prune_if_empty(kf); return
         def near_rect_edge(nx_, ny_, r):
-            rx, ry, rw, rh = r; Rx = R_px / W; Ry = R_px / H
+            rx, ry, rw, rh, robj = r; Rx = R_px / W; Ry = R_px / H
             left   = abs(nx_ - rx)      <= Rx and (ry - Ry) <= ny_ <= (ry + rh + Ry)
             right  = abs(nx_ - (rx+rw)) <= Rx and (ry - Ry) <= ny_ <= (ry + rh + Ry)
             top    = abs(ny_ - ry)      <= Ry and (rx - Rx) <= nx_ <= (rx + rw + Rx)
@@ -689,50 +737,94 @@ class VideoPlayer(QWidget):
             self.seek(pos_ms)
             QTimer.singleShot(80, lambda: self._ensure_icon_for_frame(int(fi)))
 
-    # Save / Load JSON (by frame index)
+    # Save / Load JSON (by frame index) with object ids
     def to_json_obj(self, video_path: Optional[str]) -> dict:
+        def pts_to_list(pts):
+            return [{"x": x, "y": y, "obj": obj} for (x, y, obj) in pts]
+        def rects_to_list(rects):
+            return [{"x": x, "y": y, "w": w, "h": h, "obj": obj} for (x, y, w, h, obj) in rects]
+
         return {
             "video": str(video_path) if video_path else None,
-            "fps": self._fps,  # store for reference
+            "fps": self._fps,
             "keyframes": [
                 {
                     "frame_idx": k.frame_idx,
-                    "pos_clicks": k.pos_clicks,
-                    "neg_clicks": k.neg_clicks,
-                    "rects": k.rects
+                    "pos_clicks": pts_to_list(k.pos_clicks),
+                    "neg_clicks": pts_to_list(k.neg_clicks),
+                    "rects": rects_to_list(k.rects),
                 }
                 for _, k in sorted(self.keyframes.items())
             ],
         }
 
     def load_from_json_obj(self, obj: dict):
-        # NOTE: We purposely DO NOT trust/load fps from JSON for operation;
-        # FPS must come from the currently loaded media metadata (enforced).
+        # FPS for operation still comes from current media; JSON 'fps' is advisory.
         self.keyframes.clear(); self.kf_list.clear(); self._pending_icon_updates.clear()
+
         for entry in obj.get("keyframes", []):
+            fi = int(entry["frame_idx"])
+            # Backward compatibility: support legacy tuple lists without 'obj'
+            def parse_pts(L):
+                out = []
+                for v in L:
+                    if isinstance(v, dict):
+                        out.append((float(v["x"]), float(v["y"]), int(v.get("obj", 1))))
+                    else:
+                        # old tuple [x,y] -> default obj=1
+                        x, y = v[0], v[1]
+                        out.append((float(x), float(y), 1))
+                return out
+            def parse_rects(L):
+                out = []
+                for v in L:
+                    if isinstance(v, dict):
+                        out.append((float(v["x"]), float(v["y"]), float(v["w"]), float(v["h"]), int(v.get("obj", 1))))
+                    else:
+                        # old tuple [x,y,w,h] -> default obj=1
+                        x, y, w, h = v[0], v[1], v[2], v[3]
+                        out.append((float(x), float(y), float(w), float(h), 1))
+                return out
+
             kf = Keyframe(
-                frame_idx=int(entry["frame_idx"]),
-                pos_clicks=[tuple(map(float, p)) for p in entry.get("pos_clicks", [])],
-                neg_clicks=[tuple(map(float, p)) for p in entry.get("neg_clicks", [])],
-                rects=[tuple(map(float, r)) for r in entry.get("rects", [])],
+                frame_idx=fi,
+                pos_clicks=parse_pts(entry.get("pos_clicks", [])),
+                neg_clicks=parse_pts(entry.get("neg_clicks", [])),
+                rects=parse_rects(entry.get("rects", [])),
             )
             self.keyframes[kf.frame_idx] = kf
             self._add_kf_chip(kf, with_icon=False)
             self._pending_icon_updates.add(kf.frame_idx)
+
         QTimer.singleShot(100, lambda: [self._ensure_icon_for_frame(t) for t in list(self._pending_icon_updates)])
         self.view.overlay_item.setKeyframe(self.keyframes.get(self._current_frame_idx()))
         self.view.viewport().update()
 
 
-# ---------- SideDock ----------
+# ---------- SideDock (now includes Object selector) ----------
 class SideDock(QDockWidget):
+    objectChanged = Signal(int)   # emits new object id (1-based)
+    addObjectRequested = Signal() # request to add a new object
+
     def __init__(self, parent=None):
         super().__init__("Tools", parent)
         self.setAllowedAreas(Qt.RightDockWidgetArea)
         self.container = QWidget(self); lay = QVBoxLayout(self.container)
         lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(10)
 
+        # Object selection
         lay.addWidget(QLabel("Annotate Tool"))
+        obj_group = QGroupBox("Object")
+        obj_lay = QHBoxLayout(obj_group)
+        self.object_combo = QComboBox()
+        self.object_combo.addItems(["Object 1", "Object 2", "Object 3"])
+        self.object_combo.setCurrentIndex(0)
+        self.btn_add_object = QPushButton("Add Object")
+        obj_lay.addWidget(self.object_combo, 1)
+        obj_lay.addWidget(self.btn_add_object)
+        lay.addWidget(obj_group)
+
+        # Tool selection
         self.btn_pos = QToolButton(text="Positive"); self.btn_pos.setCheckable(True)
         self.btn_neg = QToolButton(text="Negative"); self.btn_neg.setCheckable(True)
         self.btn_rect = QToolButton(text="Rectangle"); self.btn_rect.setCheckable(True)
@@ -770,6 +862,20 @@ class SideDock(QDockWidget):
         self.setWidget(self.container)
         self.tool_group = group
 
+        # Signals
+        self.object_combo.currentIndexChanged.connect(self._on_object_changed)
+        self.btn_add_object.clicked.connect(self._on_add_object)
+
+    def _on_object_changed(self, idx: int):
+        self.objectChanged.emit(idx + 1)  # 1-based
+
+    def _on_add_object(self):
+        count = self.object_combo.count()
+        next_label = f"Object {count + 1}"
+        self.object_combo.addItem(next_label)
+        self.object_combo.setCurrentIndex(count)  # select the new one
+        self.addObjectRequested.emit()
+
 
 # ---------- MainWindow ----------
 class MainWindow(QMainWindow):
@@ -778,7 +884,7 @@ class MainWindow(QMainWindow):
                  infilled_video: Optional[str] = None,
                  parent=None):
         super().__init__(parent)
-        self.setWindowTitle("VideoVanish – Playing Followers + Resync (Frame Keyframes)")
+        self.setWindowTitle("VideoVanish – Playing Followers + Resync (Frame Keyframes + Objects)")
         self.resize(1280, 820)
 
         self.current_video_path: Optional[Path] = Path(color_video) if color_video else None
@@ -793,13 +899,18 @@ class MainWindow(QMainWindow):
 
         # Wire tools
         self.tools.tool_group.idToggled.connect(self._on_tool_changed)
+        self.tools.objectChanged.connect(self.player_widget.set_current_object)
+        self.tools.addObjectRequested.connect(lambda: None)  # placeholder hook if needed later
+
         self.tools.open_color_btn.clicked.connect(self.open_color_video)
         self.tools.open_infilled_btn.clicked.connect(self.open_infilled_video)
         self.tools.open_mask_btn.clicked.connect(self.open_mask_video)
+
         self.tools.rb_original.toggled.connect(lambda checked: checked and self.set_mode("original"))
         self.tools.rb_infilled.toggled.connect(lambda checked: checked and self.set_mode("infilled"))
         self.tools.cb_show_mask.toggled.connect(self.player_widget.set_mask_visible)
         self.tools.mask_opacity.valueChanged.connect(self.player_widget.set_mask_opacity)
+
         self.tools.btn_generate_mask.clicked.connect(self.generate_mask)
         self.tools.btn_make_vanish.clicked.connect(self.make_vanish)
 
@@ -954,7 +1065,7 @@ class MainWindow(QMainWindow):
 
 # ---------- CLI & main ----------
 def parse_args(argv):
-    p = argparse.ArgumentParser(description="VideoVanish (Frame-index keyframes)")
+    p = argparse.ArgumentParser(description="VideoVanish (Frame keyframes + Objects)")
     p.add_argument("--color_video", type=str, default=None, help="Path to color/original video")
     p.add_argument("--mask_video", type=str, default=None, help="Path to mask video")
     p.add_argument("--infilled_video", type=str, default=None, help="Path to infilled video")
