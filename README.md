@@ -14,6 +14,10 @@ Most existing solutions are:
 
 In short: *professional-grade AI video inpainting, without the research-paper headaches.*
 
+### Screenshot
+<img alt="videovanish" src="https://github.com/user-attachments/assets/b61c700e-7eae-43a0-be1a-a62cb1de2418" />
+
+
 ## Plan
 VideoVanish is intended to be a **user-friendly** tool for state-of-the-art video object removal and masking.
 
