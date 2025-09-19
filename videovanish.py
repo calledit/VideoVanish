@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 
-import sam2_masker, tools
+import sam2_masker, tools, diffuerase
 
 
 # ---------- Helpers ----------
@@ -698,8 +698,7 @@ class VideoPlayer(QWidget):
         self._snap_all_to(self._last_frame_ms or self.player_orig.position())
 
     def stop(self):
-        self._resync_timer.stop()
-        self.player_orig.stop(); self.player_infill.stop(); self.mask_player.stop()
+        self.seek(0)
 
     def seek(self, pos_ms: int):
         self.player_orig.setPosition(pos_ms)
@@ -1224,11 +1223,25 @@ class MainWindow(QMainWindow):
 
         out_video = str(self.current_video_path) + "_generated_mask.mkv"
         tools.write_video_frames_to_path(out_video, mask_frames, fps, H0, W0)
+        self.mask_video_path = Path(out_video)
         self.player_widget.load_mask(out_video)
         self.player_widget.set_mask_visible(True)
         QMessageBox.information(self, "Mask generated", "The mask video file: "+out_video+" generated")
 
-    def make_vanish(self): QMessageBox.information(self, "Make Vanish", "Inpainting not yet implemented.")
+    def make_vanish(self):
+        frames, fps = tools.load_video_frames_from_path(self.current_video_path)
+        H0, W0 = frames[0].shape[:2]
+        mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path))
+
+        infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames)
+        out_video = str(self.current_video_path) + "_vanished.mkv"
+        tools.write_video_frames_to_path(out_video, infill_frames, fps, H0, W0)
+        print("generated infill")
+
+        self.infilled_video_path = Path(out_video)
+        self.player_widget.load_infilled(out_video)
+        self.tools.rb_infilled.setChecked(True)
+        self.set_mode("infilled")
 
     def on_preview_mask_clicked(self):
         # TODO: trigger your RAM mask preview generation/show here
@@ -1242,7 +1255,16 @@ class MainWindow(QMainWindow):
 
     def on_preview_infill_clicked(self):
         # TODO: trigger your RAM infill preview generation/show here
-        QMessageBox.information(self, "Preview Infill", "Preview Infill clicked.")
+        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=22)
+        H0, W0 = frames[0].shape[:2]
+        mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=self.player_widget._last_frame_idx, max_frames=22)
+
+        infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames)
+        print("generated infill")
+        self.player_widget.set_infill_preview_frames(infill_frames)
+        self.tools.rb_infilled.setChecked(True)
+        self.set_mode("infilled")
+
 
     # Menus/toolbar
     def _make_menu(self):
