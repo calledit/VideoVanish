@@ -70,6 +70,8 @@ if [[ $INSTALL_SAM2 -eq 1 ]]; then
 fi
 
 if [[ $INSTALL_DiffuEraser -eq 1 ]]; then
+	git clone https://github.com/calledit/DiffuEraser_np_array
+	pip install einops diffusers==0.29.2 transformers scipy matplotlib accelerate peft
 fi
 
 # Optional GUI
