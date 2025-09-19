@@ -11,6 +11,7 @@ import numpy as np
 import tools
 
 from sam2.build_sam import build_sam2_video_predictor
+import argparse
 
 # =============================
 # Hardcoded SAM2 config/checkpoint
@@ -175,7 +176,6 @@ def run_sam2_on_frames(frames_rgb, annotations, device=None):
 # CLI entry point
 # =============================
 def main():
-    import argparse
     ap = argparse.ArgumentParser(description="Create colored mask video with SAM2 (one color per object, black background).")
     ap.add_argument("--color_video", required=True, type=str, help="Input color video path.")
     ap.add_argument("--annotations", required=True, type=str, help="JSON annotation file.")
