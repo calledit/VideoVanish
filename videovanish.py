@@ -1232,7 +1232,7 @@ class MainWindow(QMainWindow):
 
     def on_preview_mask_clicked(self):
         # TODO: trigger your RAM mask preview generation/show here
-        frames, fps = sam2_masker.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
+        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
         annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])#only do curent frame
         if not annotations["keyframes"]:
             QMessageBox.warning(self, "No keyframe selected", "You have to create a keyframe by adding annotations to do a preview")
