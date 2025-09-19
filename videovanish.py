@@ -1,36 +1,45 @@
 #!/usr/bin/env python3
-# videovanish.py — frame-indexed keyframes + object labels per annotation
+# videovanish.py — frame-indexed keyframes + object labels + RAM previews for mask & infill
 #
-# New in this version:
-# - Object selector (Object 1..N) above annotation tools + "Add Object" button.
-# - Each positive/negative click and rectangle stores & shows an object number.
-# - Object numbers are drawn next to annotations (viewer & thumbnails).
-# - JSON now includes 'obj' for each annotation; old JSON (without obj) loads as obj=1.
+# New:
+# - In-memory preview layers for both Mask and Infilled:
+#     * set_mask_preview_frames(list_of_np_arrays, start_frame=None)
+#     * clear_mask_preview()
+#     * set_infill_preview_frames(list_of_np_arrays, start_frame=None)
+#     * clear_infill_preview()
+# - Mask preview respects Mask checkbox + opacity slider and sits above the base.
+# - Infill preview acts as the visible base when View Mode = "Infilled" (replaces file infill while present).
 #
 # Retained:
 # - Dark editor-style UI.
-# - Master/original video with audio + optional infilled + optional mask.
-# - Followers PLAY during playback, with periodic drift correction; exact snap on pause/seek.
-# - Frame-accurate UI via master QVideoSink; keyframes stored by frame index.
-# - Poster frame shows immediately on load (frame 0).
-# - Clickable seek slider; keyframe thumbnail annotations.
+# - Master/original (with audio) + optional file-backed infilled + optional file-backed mask.
+# - Followers PLAY during playback with periodic drift correction; exact snap on pause/seek.
+# - Frame-accurate UI via QVideoSink; keyframes by frame index.
+# - Object selector & labels drawn next to points/rects; JSON includes obj.
+# - Clickable seek slider; poster frame shown on load.
 
 import sys, json, argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+import numpy as np
+
 from PySide6.QtCore import Qt, QSize, QPointF, QRectF, Signal, QTimer, QUrl
-from PySide6.QtGui import QAction, QIcon, QPainter, QPen, QColor, QPixmap, QPalette, QFont
+from PySide6.QtGui import (
+    QAction, QIcon, QPainter, QPen, QColor, QPixmap, QPalette, QFont, QImage
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QLabel, QFileDialog, QPushButton, QDockWidget, QStyle,
     QToolBar, QMessageBox, QListWidget, QListWidgetItem, QButtonGroup,
     QToolButton, QGraphicsView, QGraphicsScene, QGraphicsObject, QFrame,
-    QCheckBox, QRadioButton, QGroupBox, QComboBox
+    QCheckBox, QRadioButton, QGroupBox, QComboBox, QGraphicsPixmapItem
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+
+import sam2_masker, tools
 
 
 # ---------- Helpers ----------
@@ -106,13 +115,10 @@ class OverlayItem(QGraphicsObject):
     def boundingRect(self) -> QRectF: return QRectF(self._rect)
 
     def _draw_label(self, p: QPainter, x: float, y: float, text: str):
-        # draw outlined text without altering brush/pen state for later shapes
         p.save()
         p.setFont(self.label_font)
-        p.setPen(self.label_pen)           # outline
-        p.drawText(x + 1, y + 1, text)
-        p.setPen(self.label_color)         # fill
-        p.drawText(x, y, text)
+        p.setPen(self.label_pen);   p.drawText(x + 1, y + 1, text)  # outline
+        p.setPen(self.label_color); p.drawText(x, y, text)           # fill
         p.restore()
 
     def paint(self, p: QPainter, _opt, _widget=None):
@@ -214,7 +220,7 @@ class OverlayItem(QGraphicsObject):
         return QRectF(x, y, w, h)
 
 
-# ---------- VideoView with three layers + overlay ----------
+# ---------- VideoView with base layers + previews + overlay ----------
 class VideoView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -226,27 +232,69 @@ class VideoView(QGraphicsView):
         self.setBackgroundBrush(QColor(18, 18, 22))
         self.scene_.setSceneRect(QRectF(0, 0, 1280, 720))
 
+        # Base video items
         self.video_item_orig = QGraphicsVideoItem();  self.video_item_orig.setZValue(0.0)
         self.video_item_infill = QGraphicsVideoItem(); self.video_item_infill.setZValue(0.0); self.video_item_infill.setVisible(False)
-        self.mask_item = QGraphicsVideoItem();        self.mask_item.setZValue(10.0); self.mask_item.setOpacity(0.4); self.mask_item.setVisible(False)
-
         self.scene_.addItem(self.video_item_orig)
         self.scene_.addItem(self.video_item_infill)
+
+        # Infill RAM preview as a base pixmap (replaces file infill when active)
+        self.infill_preview_item = QGraphicsPixmapItem()
+        self.infill_preview_item.setZValue(0.0)
+        self.infill_preview_item.setVisible(False)
+        self.scene_.addItem(self.infill_preview_item)
+
+        # Mask (file-backed) as a video layer on top
+        self.mask_item = QGraphicsVideoItem(); self.mask_item.setZValue(10.0)
+        self.mask_item.setOpacity(0.4); self.mask_item.setVisible(False)
         self.scene_.addItem(self.mask_item)
 
+        # Mask RAM preview as a pixmap layer on top
+        self.mask_preview_item = QGraphicsPixmapItem()
+        self.mask_preview_item.setZValue(15.0)
+        self.mask_preview_item.setVisible(False)
+        self.scene_.addItem(self.mask_preview_item)
+
+        # Annotation overlay above everything
         rect = QRectF(0, 0, 1280, 720)
         for it in (self.video_item_orig, self.video_item_infill, self.mask_item):
             it.setSize(rect.size())
         self.overlay_item = OverlayItem(rect); self.overlay_item.setZValue(20.0); self.scene_.addItem(self.overlay_item)
 
-    def set_base_visible(self, which: str):
+    # Base visibility (original vs infilled)
+    def set_base_visible(self, which: str, use_infill_preview: bool = False):
         if which == "original":
-            self.video_item_orig.setVisible(True); self.video_item_infill.setVisible(False)
+            self.video_item_orig.setVisible(True)
+            self.video_item_infill.setVisible(False)
+            self.infill_preview_item.setVisible(False)
         else:
-            self.video_item_orig.setVisible(False); self.video_item_infill.setVisible(True)
+            self.video_item_orig.setVisible(False)
+            # If preview frames present, show preview pixmap instead of file infill
+            self.infill_preview_item.setVisible(use_infill_preview)
+            self.video_item_infill.setVisible(not use_infill_preview)
 
+    # Mask visibility / opacity
     def set_mask_visible(self, vis: bool): self.mask_item.setVisible(vis)
     def set_mask_opacity(self, alpha: float): self.mask_item.setOpacity(alpha)
+
+    # Mask preview helpers
+    def set_mask_preview_visible(self, vis: bool): self.mask_preview_item.setVisible(vis)
+    def set_mask_preview_opacity(self, alpha: float): self.mask_preview_item.setOpacity(alpha)
+
+    # Common pixmap scaling for both preview layers
+    def _fit_and_set_pixmap(self, item: QGraphicsPixmapItem, pix: QPixmap):
+        target = self.overlay_item.boundingRect()
+        if not target.isEmpty() and not pix.isNull():
+            scaled = pix.scaled(int(target.width()), int(target.height()),
+                                Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            item.setPixmap(scaled)
+            item.setPos(target.topLeft())
+
+    def set_mask_preview_pixmap(self, pix: QPixmap):
+        self._fit_and_set_pixmap(self.mask_preview_item, pix)
+
+    def set_infill_preview_pixmap(self, pix: QPixmap):
+        self._fit_and_set_pixmap(self.infill_preview_item, pix)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -269,7 +317,13 @@ class VideoView(QGraphicsView):
         self.overlay_item.setRect(target)
         self.scene_.setSceneRect(QRectF(0, 0, view_rect.width(), view_rect.height()))
 
-    # Thumbnails with overlay painted
+        # Reposition/scale current preview pixmaps to fit
+        if not self.mask_preview_item.pixmap().isNull():
+            self.set_mask_preview_pixmap(self.mask_preview_item.pixmap())
+        if not self.infill_preview_item.pixmap().isNull():
+            self.set_infill_preview_pixmap(self.infill_preview_item.pixmap())
+
+    # Thumbnails (draw overlay annotations)
     def _draw_annotations_on_pixmap(self, pix: QPixmap, kf: Optional[Keyframe]) -> QPixmap:
         if pix.isNull() or not kf: return pix
         p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing, True)
@@ -295,8 +349,7 @@ class VideoView(QGraphicsView):
             p.setPen(text_color); p.drawText(x + w + 2, y + 9, f"{obj}")
 
         # Dots
-        r_px = 5.0; p.setPen(Qt.NoPen); 
-        # Positive
+        r_px = 5.0; p.setPen(Qt.NoPen)
         p.setBrush(QColor(55, 200, 90, 235))
         for (nx, ny, obj) in kf.pos_clicks:
             x = (rect.left() + nx * rect.width()) * sx
@@ -304,7 +357,7 @@ class VideoView(QGraphicsView):
             p.drawEllipse(QPointF(x, y), r_px, r_px)
             p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
             p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
-        # Negative
+
         p.setBrush(QColor(230, 70, 70, 235))
         for (nx, ny, obj) in kf.neg_clicks:
             x = (rect.left() + nx * rect.width()) * sx
@@ -345,8 +398,8 @@ class VideoPlayer(QWidget):
 
         # Players
         self.player_orig = QMediaPlayer(self)    # master (audio)
-        self.player_infill = QMediaPlayer(self)  # follower
-        self.mask_player = QMediaPlayer(self)    # follower
+        self.player_infill = QMediaPlayer(self)  # follower (file-backed infill)
+        self.mask_player = QMediaPlayer(self)    # follower (file-backed mask)
 
         # Audio
         self.audio = QAudioOutput(self); self.audio.setVolume(0.9)
@@ -384,6 +437,14 @@ class VideoPlayer(QWidget):
 
         # Current object selection (1-based)
         self.current_object: int = 1
+
+        # --- RAM mask preview state ---
+        self._mask_preview_frames: Optional[List[np.ndarray]] = None
+        self._mask_preview_start_frame: int = 0
+
+        # --- RAM infill preview state ---
+        self._infill_preview_frames: Optional[List[np.ndarray]] = None
+        self._infill_preview_start_frame: int = 0
 
         # Keyframe bar
         self.kf_list = QListWidget(); self.kf_list.setFlow(QListWidget.LeftToRight); self.kf_list.setWrapping(False)
@@ -425,50 +486,173 @@ class VideoPlayer(QWidget):
         ov.addRectangle.connect(self._on_add_rect)
         ov.requestDelete.connect(self._on_delete_at)
 
-        # Annotation store: keyed by frame index
+        # Annotation store
         self.keyframes: Dict[int, Keyframe] = {}
         self._pending_icon_updates: set[int] = set()
 
-    # Object selection API
+    # ---------- Object selection ----------
     def set_current_object(self, obj_id: int):
         if obj_id >= 1:
             self.current_object = obj_id
 
-    # Public API
+    # ---------- Public API: load media ----------
     def load_original(self, path: str):
         p = str(Path(path).resolve())
         self._poster_ready = False
-        self._fps = None  # force re-detect & enforce
+        self._fps = None
         self.player_orig.setSource(QUrl.fromLocalFile(p))
 
     def load_infilled(self, path: str):
+        # If a RAM preview exists, clear it so file-backed infill takes over.
+        if self._infill_preview_frames is not None:
+            self.clear_infill_preview()
         self.player_infill.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
 
     def load_mask(self, path: str):
+        # If a RAM preview exists, clear it so file-backed mask takes over.
+        if self._mask_preview_frames is not None:
+            self.clear_mask_preview()
         self.mask_player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
 
-    # Slider handlers
+    # ---------- RAM preview: shared utilities ----------
+    def _np_to_qpixmap(self, arr: np.ndarray) -> QPixmap:
+        """Accept (H,W), (H,W,3), or (H,W,4) uint8 and return a QPixmap."""
+        if arr is None:
+            return QPixmap()
+        a = np.asarray(arr)
+        if a.dtype != np.uint8:
+            a = np.clip(a, 0, 255).astype(np.uint8)
+
+        if a.ndim == 2:
+            h, w = a.shape
+            a_rgb = np.repeat(a[:, :, None], 3, axis=2)
+            bytes_per_line = 3 * w
+            qimg = QImage(a_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+            return QPixmap.fromImage(qimg)
+
+        if a.ndim == 3 and a.shape[2] == 3:
+            h, w, _ = a.shape
+            bytes_per_line = 3 * w
+            qimg = QImage(a.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+            return QPixmap.fromImage(qimg)
+
+        if a.ndim == 3 and a.shape[2] == 4:
+            h, w, _ = a.shape
+            bytes_per_line = 4 * w
+            qimg = QImage(a.data, w, h, bytes_per_line, QImage.Format_RGBA8888).copy()
+            return QPixmap.fromImage(qimg)
+
+        # Fallback: coerce to RGB
+        a = a.reshape(a.shape[0], a.shape[1], -1)
+        if a.shape[2] >= 3:
+            return self._np_to_qpixmap(a[:, :, :3].copy())
+        return QPixmap()
+
+    # ---------- RAM preview: MASK ----------
+    def set_mask_preview_frames(self, frames: List[np.ndarray], start_frame: Optional[int] = None):
+        """Provide a short RAM mask sequence. frames[i] -> mask for (start_frame + i)."""
+        if not frames:
+            self.clear_mask_preview()
+            return
+        if start_frame is None:
+            start_frame = self._current_frame_idx() if (self._fps and self._fps > 0) else 0
+
+        self._mask_preview_frames = frames
+        self._mask_preview_start_frame = int(start_frame)
+
+        # If mask is visible, switch to preview layer; else keep hidden until user toggles
+        if self.view.mask_item.isVisible() or True:
+            # hide file-mask (we'll manage it in set_mask_visible)
+            self.view.set_mask_visible(False)
+            self.view.set_mask_preview_visible(True)
+            self.view.set_mask_preview_opacity(0.5)#we overwrite the opactity here 
+            self._update_mask_preview_for_frame(self._current_frame_idx())
+
+    def clear_mask_preview(self):
+        self._mask_preview_frames = None
+        self._mask_preview_start_frame = 0
+        self.view.set_mask_preview_visible(False)
+
+    def _update_mask_preview_for_frame(self, frame_idx: int):
+        if not self._mask_preview_frames:
+            return
+        i = frame_idx - self._mask_preview_start_frame
+        if i < 0 or i >= len(self._mask_preview_frames):
+            self.view.set_mask_preview_visible(False)
+            return
+        arr = self._mask_preview_frames[i]
+        pix = self._np_to_qpixmap(arr)
+        if not pix.isNull():
+            self.view.set_mask_preview_visible(True)
+            self.view.set_mask_preview_pixmap(pix)
+
+    # ---------- RAM preview: INFILL ----------
+    def set_infill_preview_frames(self, frames: List[np.ndarray], start_frame: Optional[int] = None):
+        """Provide a short RAM infill sequence that acts as the base when mode='infilled'."""
+        if not frames:
+            self.clear_infill_preview()
+            return
+        if start_frame is None:
+            start_frame = self._current_frame_idx() if (self._fps and self._fps > 0) else 0
+
+        self._infill_preview_frames = frames
+        self._infill_preview_start_frame = int(start_frame)
+
+        # If in 'infilled' mode, show the preview pixmap base instead of file-backed infill
+        if self.show_mode == "infilled":
+            self.view.set_base_visible("infilled", use_infill_preview=True)
+            self._update_infill_preview_for_frame(self._current_frame_idx())
+
+    def clear_infill_preview(self):
+        self._infill_preview_frames = None
+        self._infill_preview_start_frame = 0
+        # If currently in 'infilled' mode, switch back to file-backed infill visibility
+        if self.show_mode == "infilled":
+            self.view.set_base_visible("infilled", use_infill_preview=False)
+
+    def _update_infill_preview_for_frame(self, frame_idx: int):
+        if not self._infill_preview_frames:
+            return
+        if self.show_mode != "infilled":
+            return
+        i = frame_idx - self._infill_preview_start_frame
+        if i < 0 or i >= len(self._infill_preview_frames):
+            # out of range; hide preview (black) to avoid stale frame
+            self.view.infill_preview_item.setVisible(False)
+            return
+        arr = self._infill_preview_frames[i]
+        pix = self._np_to_qpixmap(arr)
+        if not pix.isNull():
+            self.view.infill_preview_item.setVisible(True)
+            self.view.set_infill_preview_pixmap(pix)
+
+    # ---------- Slider handlers ----------
     def _slider_pressed(self): self._slider_down = True
     def _slider_released(self):
         self._slider_down = False
         self.seek(self.pos_slider.value())
         QTimer.singleShot(30, lambda: self.pos_slider.setValue(self._last_frame_ms))
 
-    # Mode
+    # ---------- Mode ----------
     def set_mode(self, mode: str):
         if mode == self.show_mode: return
         was_playing = (self.player_orig.playbackState() == QMediaPlayer.PlayingState)
         self.pause_all()
         self.show_mode = mode
-        self.view.set_base_visible(mode)
+        use_preview = (mode == "infilled" and self._infill_preview_frames is not None)
+        self.view.set_base_visible(mode, use_infill_preview=use_preview)
         if was_playing: self.play_all()
         else: self._snap_all_to(self._last_frame_ms or self.player_orig.position())
 
-    # Mask
+    # ---------- Mask visibility/opacity ----------
     def set_mask_visible(self, vis: bool):
-        self.view.set_mask_visible(vis)
+        # If RAM preview exists, toggle that; else toggle file-backed mask player
+        has_preview = (self._mask_preview_frames is not None)
+        self.view.set_mask_preview_visible(vis and has_preview)
+        self.view.set_mask_visible(vis and not has_preview)
+
         cur = self._last_frame_ms or self.player_orig.position()
-        if vis:
+        if vis and not has_preview:
             if self.player_orig.playbackState() == QMediaPlayer.PlayingState:
                 self.mask_player.setPosition(cur); self.mask_player.play()
             else:
@@ -476,24 +660,36 @@ class VideoPlayer(QWidget):
         else:
             self.mask_player.pause()
 
-    def set_mask_opacity(self, value: int): self.view.set_mask_opacity(max(0.0, min(1.0, value / 100.0)))
+        if vis and has_preview:
+            self._update_mask_preview_for_frame(self._current_frame_idx())
 
-    # Transport
+    def set_mask_opacity(self, value: int):
+        alpha = max(0.0, min(1.0, value / 100.0))
+        self.view.set_mask_opacity(alpha)
+        self.view.set_mask_preview_opacity(alpha)
+
+    # ---------- Transport ----------
     def toggle_play(self):
         if self.player_orig.playbackState() == QMediaPlayer.PlayingState: self.pause_all()
         else: self.play_all()
 
     def play_all(self):
         cur = self._last_frame_ms or self.player_orig.position()
+        # Master
         self.player_orig.setPosition(cur); self.player_orig.play()
-        if self.show_mode == "infilled":
+
+        # Infilled: only play file-backed when visible and no preview
+        if self.show_mode == "infilled" and self._infill_preview_frames is None:
             self.player_infill.setPosition(cur); self.player_infill.play()
         else:
             self.player_infill.pause()
-        if self.view.mask_item.isVisible():
+
+        # Mask: only play when visible AND no preview
+        if self.view.mask_item.isVisible() and self._mask_preview_frames is None:
             self.mask_player.setPosition(cur); self.mask_player.play()
         else:
             self.mask_player.pause()
+
         self._resync_timer.start()
 
     def pause_all(self):
@@ -507,8 +703,10 @@ class VideoPlayer(QWidget):
 
     def seek(self, pos_ms: int):
         self.player_orig.setPosition(pos_ms)
-        if self.show_mode == "infilled": self.player_infill.setPosition(pos_ms)
-        if self.view.mask_item.isVisible(): self.mask_player.setPosition(pos_ms)
+        if self.show_mode == "infilled" and self._infill_preview_frames is None:
+            self.player_infill.setPosition(pos_ms)
+        if self.view.mask_item.isVisible() and self._mask_preview_frames is None:
+            self.mask_player.setPosition(pos_ms)
 
         self._last_frame_ms = pos_ms
         if not self._slider_down: self.pos_slider.setValue(pos_ms)
@@ -517,6 +715,11 @@ class VideoPlayer(QWidget):
         if self._fps is not None and self._fps > 0:
             self._last_frame_idx = ms_to_frame(pos_ms, self._fps)
             self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
+
+        # Update RAM previews (if present)
+        self._update_mask_preview_for_frame(self._last_frame_idx)
+        self._update_infill_preview_for_frame(self._last_frame_idx)
+
         self.view.viewport().update()
 
         if self.player_orig.playbackState() != QMediaPlayer.PlayingState:
@@ -524,7 +727,7 @@ class VideoPlayer(QWidget):
 
     def set_volume(self, value: int): self.audio.setVolume(max(0.0, min(1.0, value / 100.0)))
 
-    # Frame-driven UI (decoded frames)
+    # ---------- Frame-driven UI (decoded master frames) ----------
     def _on_master_frame_changed(self, frame):
         ts_us = frame.startTime()
         pos_ms = int(ts_us // 1000) if (ts_us is not None and ts_us >= 0) else self.player_orig.position()
@@ -539,31 +742,45 @@ class VideoPlayer(QWidget):
 
         self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
 
-    # Periodic resync while playing
+        # Advance RAM previews if present
+        self._update_mask_preview_for_frame(self._last_frame_idx)
+        self._update_infill_preview_for_frame(self._last_frame_idx)
+
+    # ---------- Periodic resync while playing ----------
     def _playing_resync(self):
         if self.player_orig.playbackState() != QMediaPlayer.PlayingState: return
         master_ms = self._last_frame_ms or self.player_orig.position()
-        if self.show_mode == "infilled":
+
+        # Infilled drift correction only if file-backed infill is active
+        if self.show_mode == "infilled" and self._infill_preview_frames is None:
             d = abs((self.player_infill.position() or 0) - master_ms)
             if d > self.resync_threshold_ms: self.player_infill.setPosition(master_ms)
-        if self.view.mask_item.isVisible():
+
+        # Mask drift correction only if file-backed mask is active & visible
+        if self.view.mask_item.isVisible() and self._mask_preview_frames is None:
             d = abs((self.mask_player.position() or 0) - master_ms)
             if d > self.resync_threshold_ms: self.mask_player.setPosition(master_ms)
 
     def _snap_all_to(self, pos_ms: int, snap_orig=False):
         if snap_orig: self.player_orig.setPosition(pos_ms)
-        if self.show_mode == "infilled": self.player_infill.setPosition(pos_ms)
-        if self.view.mask_item.isVisible(): self.mask_player.setPosition(pos_ms)
+        if self.show_mode == "infilled" and self._infill_preview_frames is None:
+            self.player_infill.setPosition(pos_ms)
+        if self.view.mask_item.isVisible() and self._mask_preview_frames is None:
+            self.mask_player.setPosition(pos_ms)
 
         if self._fps is not None and self._fps > 0:
             self._last_frame_idx = ms_to_frame(pos_ms, self._fps)
             self.view.overlay_item.setKeyframe(self.keyframes.get(self._last_frame_idx))
 
+        # Update RAM previews too
+        self._update_mask_preview_for_frame(self._last_frame_idx)
+        self._update_infill_preview_for_frame(self._last_frame_idx)
+
         self.pos_slider.setValue(pos_ms)
         self.time_label.setText(f"{fmt_ms(pos_ms)} / {fmt_ms(self.player_orig.duration() or 0)}")
         self.view.viewport().update()
 
-    # Enforce FPS on media load + poster frame
+    # ---------- Enforce FPS on media load + poster frame ----------
     def _on_master_media_status(self, status):
         from PySide6.QtMultimedia import QMediaPlayer
         if self._poster_ready: return
@@ -602,17 +819,26 @@ class VideoPlayer(QWidget):
             self._last_frame_idx = 0
             self.view.overlay_item.setKeyframe(self.keyframes.get(0))
 
-        if self.show_mode == "infilled":
+        # Ensure base visibility reflects current mode + preview state
+        use_preview = (self.show_mode == "infilled" and self._infill_preview_frames is not None)
+        self.view.set_base_visible(self.show_mode, use_infill_preview=use_preview)
+
+        # Keep file followers at t=0 (if active)
+        if self.show_mode == "infilled" and self._infill_preview_frames is None:
             self.player_infill.pause(); self.player_infill.setPosition(0)
-        if self.view.mask_item.isVisible():
+        if self.view.mask_item.isVisible() and self._mask_preview_frames is None:
             self.mask_player.pause(); self.mask_player.setPosition(0)
+
+        # Update RAM previews for frame 0
+        self._update_mask_preview_for_frame(0)
+        self._update_infill_preview_for_frame(0)
 
         self.pos_slider.setValue(0)
         self.time_label.setText(f"{fmt_ms(0)} / {fmt_ms(self.player_orig.duration() or 0)}")
         self.view.viewport().update()
         self._poster_ready = True
 
-    # Master UI handlers
+    # ---------- Master UI handlers ----------
     def _on_master_position_changed(self, position):
         if not self._slider_down: self.pos_slider.setValue(position)
         self.positionChanged.emit(position)
@@ -648,7 +874,6 @@ class VideoPlayer(QWidget):
             it = self.kf_list.item(row); t = it.data(Qt.UserRole)
             if t is not None and fi < t: insert_row = row; break
 
-        # label with time if fps known, else frame #
         label = f"#{fi}"
         if self._fps: label = f"{fmt_ms(frame_to_ms(fi, self._fps))}"
         item = QListWidgetItem(label)
@@ -687,7 +912,7 @@ class VideoPlayer(QWidget):
         else:
             self._ensure_icon_for_frame(kf.frame_idx)
 
-    # Annotation slots (by frame) — now include object id
+    # Annotation slots (by frame) — include object id
     def _on_add_positive(self, nx: float, ny: float):
         kf = self._get_or_make_kf(); kf.pos_clicks.append((nx, ny, self.current_object))
         self.view.overlay_item.setKeyframe(kf); self._ensure_icon_for_frame(kf.frame_idx)
@@ -737,7 +962,7 @@ class VideoPlayer(QWidget):
             self.seek(pos_ms)
             QTimer.singleShot(80, lambda: self._ensure_icon_for_frame(int(fi)))
 
-    # Save / Load JSON (by frame index) with object ids
+    # Save / Load JSON (frame-based) with object ids
     def to_json_obj(self, video_path: Optional[str]) -> dict:
         def pts_to_list(pts):
             return [{"x": x, "y": y, "obj": obj} for (x, y, obj) in pts]
@@ -759,19 +984,16 @@ class VideoPlayer(QWidget):
         }
 
     def load_from_json_obj(self, obj: dict):
-        # FPS for operation still comes from current media; JSON 'fps' is advisory.
         self.keyframes.clear(); self.kf_list.clear(); self._pending_icon_updates.clear()
 
         for entry in obj.get("keyframes", []):
             fi = int(entry["frame_idx"])
-            # Backward compatibility: support legacy tuple lists without 'obj'
             def parse_pts(L):
                 out = []
                 for v in L:
                     if isinstance(v, dict):
                         out.append((float(v["x"]), float(v["y"]), int(v.get("obj", 1))))
                     else:
-                        # old tuple [x,y] -> default obj=1
                         x, y = v[0], v[1]
                         out.append((float(x), float(y), 1))
                 return out
@@ -781,7 +1003,6 @@ class VideoPlayer(QWidget):
                     if isinstance(v, dict):
                         out.append((float(v["x"]), float(v["y"]), float(v["w"]), float(v["h"]), int(v.get("obj", 1))))
                     else:
-                        # old tuple [x,y,w,h] -> default obj=1
                         x, y, w, h = v[0], v[1], v[2], v[3]
                         out.append((float(x), float(y), float(w), float(h), 1))
                 return out
@@ -801,10 +1022,10 @@ class VideoPlayer(QWidget):
         self.view.viewport().update()
 
 
-# ---------- SideDock (now includes Object selector) ----------
+# ---------- SideDock (includes Object selector) ----------
 class SideDock(QDockWidget):
-    objectChanged = Signal(int)   # emits new object id (1-based)
-    addObjectRequested = Signal() # request to add a new object
+    objectChanged = Signal(int)
+    addObjectRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__("Tools", parent)
@@ -812,8 +1033,9 @@ class SideDock(QDockWidget):
         self.container = QWidget(self); lay = QVBoxLayout(self.container)
         lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(10)
 
-        # Object selection
         lay.addWidget(QLabel("Annotate Tool"))
+
+        # Object group
         obj_group = QGroupBox("Object")
         obj_lay = QHBoxLayout(obj_group)
         self.object_combo = QComboBox()
@@ -854,10 +1076,36 @@ class SideDock(QDockWidget):
         mk_lay.addWidget(self.cb_show_mask); mk_lay.addLayout(op_row)
         lay.addWidget(mask_group)
 
+        # --- compact action rows with preview buttons ---
         lay.addStretch(1)
+
+        # Row 1: Mask (Generate + Preview)
+        row_mask = QHBoxLayout()
         self.btn_generate_mask = QPushButton("Generate Mask")
+        self.btn_generate_mask.setFixedWidth(140)     # narrower
+        self.btn_preview_mask  = QPushButton("Preview")
+        self.btn_preview_mask.setFixedWidth(100)      # new
+        row_mask.addWidget(self.btn_generate_mask)
+        row_mask.addWidget(self.btn_preview_mask)
+        row_mask.addStretch(1)
+        lay.addLayout(row_mask)
+
+        # Row 2: Infill (Make Vanish + Preview)
+        row_infill = QHBoxLayout()
         self.btn_make_vanish   = QPushButton("Make Vanish")
-        lay.addWidget(self.btn_generate_mask); lay.addWidget(self.btn_make_vanish)
+        self.btn_make_vanish.setFixedWidth(140)       # narrower
+        self.btn_preview_infill = QPushButton("Preview")
+        self.btn_preview_infill.setFixedWidth(100)    # new
+        row_infill.addWidget(self.btn_make_vanish)
+        row_infill.addWidget(self.btn_preview_infill)
+        row_infill.addStretch(1)
+        lay.addLayout(row_infill)
+
+
+        # Optional: expose preview clicks upward
+        self.btn_preview_mask.clicked.connect(lambda: getattr(self.parent(), "on_preview_mask_clicked", lambda: None)())
+        self.btn_preview_infill.clicked.connect(lambda: getattr(self.parent(), "on_preview_infill_clicked", lambda: None)())
+
 
         self.setWidget(self.container)
         self.tool_group = group
@@ -873,7 +1121,7 @@ class SideDock(QDockWidget):
         count = self.object_combo.count()
         next_label = f"Object {count + 1}"
         self.object_combo.addItem(next_label)
-        self.object_combo.setCurrentIndex(count)  # select the new one
+        self.object_combo.setCurrentIndex(count)
         self.addObjectRequested.emit()
 
 
@@ -884,7 +1132,7 @@ class MainWindow(QMainWindow):
                  infilled_video: Optional[str] = None,
                  parent=None):
         super().__init__(parent)
-        self.setWindowTitle("VideoVanish – Playing Followers + Resync (Frame Keyframes + Objects)")
+        self.setWindowTitle("VideoVanish – Playing Followers + Resync (Frame Keyframes + Objects + RAM Previews)")
         self.resize(1280, 820)
 
         self.current_video_path: Optional[Path] = Path(color_video) if color_video else None
@@ -900,7 +1148,7 @@ class MainWindow(QMainWindow):
         # Wire tools
         self.tools.tool_group.idToggled.connect(self._on_tool_changed)
         self.tools.objectChanged.connect(self.player_widget.set_current_object)
-        self.tools.addObjectRequested.connect(lambda: None)  # placeholder hook if needed later
+        self.tools.addObjectRequested.connect(lambda: None)
 
         self.tools.open_color_btn.clicked.connect(self.open_color_video)
         self.tools.open_infilled_btn.clicked.connect(self.open_infilled_video)
@@ -925,9 +1173,76 @@ class MainWindow(QMainWindow):
             self.infilled_video_path = Path(infilled_video)
             self.player_widget.load_infilled(infilled_video)
 
+    def _annotations_dict_for_frames(self, frame_indices: list[int] | None = None) -> dict:
+        """
+        Build the annotations dict expected by masker:
+
+        If frame_indices is None, include *all* keyframes with annotations.
+        Otherwise, only include frames in frame_indices.
+        """
+        vp = self.player_widget
+        out_keyframes = []
+
+        # which frames to check?
+        frames_to_check = (
+            frame_indices if frame_indices is not None
+            else sorted(vp.keyframes.keys())
+        )
+
+        for fi in frames_to_check:
+            kf = vp.keyframes.get(fi)
+            if not kf:
+                continue
+
+            def pack_pts(pts):
+                return [{"x": float(x), "y": float(y), "obj": int(obj)}
+                        for (x, y, obj) in pts]
+
+            def pack_rects(rects):
+                return [{"x": float(x), "y": float(y), "w": float(w), "h": float(h), "obj": int(obj)}
+                        for (x, y, w, h, obj) in rects]
+
+            has_any = (len(kf.pos_clicks) + len(kf.neg_clicks) + len(kf.rects)) > 0
+            if not has_any:
+                continue
+
+            out_keyframes.append({
+                "frame_idx": int(kf.frame_idx),
+                "pos_clicks": pack_pts(kf.pos_clicks),
+                "neg_clicks": pack_pts(kf.neg_clicks),
+                "rects":     pack_rects(kf.rects),
+            })
+
+        return {"keyframes": out_keyframes}
+   
     # Stubs for processing
-    def generate_mask(self): QMessageBox.information(self, "Generate Mask", "Mask generation not yet implemented.")
+    def generate_mask(self):
+        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=0, max_frames=-1)
+        H0, W0 = frames[0].shape[:2]
+        annotations = self._annotations_dict_for_frames(None)
+        mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+
+        out_video = str(self.current_video_path) + "_generated_mask.mkv"
+        tools.write_video_frames_to_path(out_video, mask_frames, fps, H0, W0)
+        self.player_widget.load_mask(out_video)
+        self.player_widget.set_mask_visible(True)
+        QMessageBox.information(self, "Mask generated", "The mask video file: "+out_video+" generated")
+
     def make_vanish(self): QMessageBox.information(self, "Make Vanish", "Inpainting not yet implemented.")
+
+    def on_preview_mask_clicked(self):
+        # TODO: trigger your RAM mask preview generation/show here
+        frames, fps = sam2_masker.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
+        annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])#only do curent frame
+        if not annotations["keyframes"]:
+            QMessageBox.warning(self, "No keyframe selected", "You have to create a keyframe by adding annotations to do a preview")
+            return
+        mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+        self.player_widget.set_mask_preview_frames(mask_frames)
+
+    def on_preview_infill_clicked(self):
+        # TODO: trigger your RAM infill preview generation/show here
+        QMessageBox.information(self, "Preview Infill", "Preview Infill clicked.")
 
     # Menus/toolbar
     def _make_menu(self):
@@ -1020,8 +1335,9 @@ class MainWindow(QMainWindow):
     # Mode
     def set_mode(self, mode: str):
         if mode not in ("original", "infilled"): return
-        if mode == "infilled" and not self.infilled_video_path:
-            QMessageBox.warning(self, "Infilled missing", "Load an infilled video first."); self.tools.rb_original.setChecked(True); return
+        if mode == "infilled" and not self.infilled_video_path and self.player_widget._infill_preview_frames is None:
+            QMessageBox.warning(self, "Infilled missing", "Load an infilled video first, or set infill preview frames.")
+            self.tools.rb_original.setChecked(True); return
         self.player_widget.set_mode(mode)
 
     # Save/Load annotations (frame-based)
@@ -1065,7 +1381,7 @@ class MainWindow(QMainWindow):
 
 # ---------- CLI & main ----------
 def parse_args(argv):
-    p = argparse.ArgumentParser(description="VideoVanish (Frame keyframes + Objects)")
+    p = argparse.ArgumentParser(description="VideoVanish (Frame keyframes + Objects + RAM Previews)")
     p.add_argument("--color_video", type=str, default=None, help="Path to color/original video")
     p.add_argument("--mask_video", type=str, default=None, help="Path to mask video")
     p.add_argument("--infilled_video", type=str, default=None, help="Path to infilled video")
