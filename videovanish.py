@@ -1233,10 +1233,12 @@ class MainWindow(QMainWindow):
         H0, W0 = frames[0].shape[:2]
         mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path))
 
+        print("generating infill, please wait...")
         infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames)
         out_video = str(self.current_video_path) + "_vanished.mkv"
         tools.write_video_frames_to_path(out_video, infill_frames, fps, H0, W0)
         print("generated infill")
+        QMessageBox.information(self, "Infill generated", "The infilled video file: "+out_video+" generated")
 
         self.infilled_video_path = Path(out_video)
         self.player_widget.load_infilled(out_video)
@@ -1250,6 +1252,8 @@ class MainWindow(QMainWindow):
         if not annotations["keyframes"]:
             QMessageBox.warning(self, "No keyframe selected", "You have to create a keyframe by adding annotations to do a preview")
             return
+        for kf in annotations.get('keyframes', []):
+            kf['frame_idx'] = 0
         mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
         self.player_widget.set_mask_preview_frames(mask_frames)
 
