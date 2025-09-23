@@ -15,7 +15,7 @@ last_ckpt = None
 video_inpainting_sd = None
 propainter = None
 
-def run_infill_on_frames(frames_rgb, mask_frames, mask_dilation_iter = 8, ckpt = "2-Step", propainer_frames = None):
+def run_infill_on_frames(frames_rgb, mask_frames, mask_dilation_iter = 8, ckpt = "2-Step", propainer_frames = None, max_img_size = 960):
     global device, last_ckpt, video_inpainting_sd, propainter
     # PCM params
     if last_ckpt != ckpt:
@@ -39,7 +39,7 @@ def run_infill_on_frames(frames_rgb, mask_frames, mask_dilation_iter = 8, ckpt =
     ## diffueraser
     guidance_scale = None    # The default value is 0.  
     inpainted_frames = video_inpainting_sd.forward(frames_rgb, mask_frames, propainer_frames,
-                                max_img_size = 960, mask_dilation_iter=mask_dilation_iter,
+                                max_img_size = max_img_size, mask_dilation_iter=mask_dilation_iter,
                                 guidance_scale=None)
 
     for i, f in enumerate(inpainted_frames):

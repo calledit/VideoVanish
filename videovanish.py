@@ -32,12 +32,16 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSlider, QLabel, QFileDialog, QPushButton, QDockWidget, QStyle,
-    QToolBar, QMessageBox, QListWidget, QListWidgetItem, QButtonGroup,
+    QToolBar, QMessageBox, QListWidget, QListWidgetItem, QButtonGroup, QSpinBox,
     QToolButton, QGraphicsView, QGraphicsScene, QGraphicsObject, QFrame,
     QCheckBox, QRadioButton, QGroupBox, QComboBox, QGraphicsPixmapItem
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+
+from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar, QPushButton
+import traceback
 
 import sam2_masker, tools, diffuerase
 
@@ -67,6 +71,66 @@ class Keyframe:
     # Each rect: (x_norm, y_norm, w_norm, h_norm, obj_id)
     rects: List[Tuple[float, float, float, float, int]] = field(default_factory=list)
 
+
+class ProgressDialog(QDialog):
+    canceled = Signal()
+
+    def __init__(self, title: str, parent=None, can_cancel: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(False)  # modeless so users can still click other buttons
+        self.setMinimumWidth(360)
+        layout = QVBoxLayout(self)
+        self.status_label = QLabel("Starting…")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.bar)
+        if can_cancel:
+            self.btn_cancel = QPushButton("Cancel")
+            self.btn_cancel.clicked.connect(self.canceled)
+            layout.addWidget(self.btn_cancel)
+        else:
+            self.btn_cancel = None
+
+    def set_status(self, text: str):
+        self.status_label.setText(text)
+
+    def set_progress(self, pct: int):
+        self.bar.setValue(max(0, min(100, int(pct))))
+
+class Worker(QObject):
+    progress = Signal(int, str)      # (percent, status)
+    finished = Signal(object)        # result
+    failed = Signal(str)             # error text/trace
+    _cancel_requested = False
+
+    @Slot()
+    def run(self):
+        # `self.func` must be set before start; it receives (report, is_canceled)
+        # where `report(pct:int, status:str)` updates the UI and
+        # `is_canceled()` lets the job stop early.
+        def report(pct: int, status: str = ""):
+            self.progress.emit(int(pct), status)
+
+        def is_canceled():
+            return self._cancel_requested
+
+        err = None
+        try:
+            result = self.func(report, is_canceled)
+        except Exception:
+            err = str(traceback.format_exc())
+            print(err)
+        if err is not None:
+            self.failed.emit(err) 
+            return
+        self.finished.emit(result)
+        return 
+
+    def request_cancel(self):
+        self._cancel_requested = True
 
 # ---------- Overlay for drawing points/rectangles ----------
 class OverlayItem(QGraphicsObject):
@@ -490,6 +554,26 @@ class VideoPlayer(QWidget):
         self.keyframes: Dict[int, Keyframe] = {}
         self._pending_icon_updates: set[int] = set()
 
+
+    def _seek_player_to_current_when_loaded(self, follower: QMediaPlayer):
+        """Once follower has Loaded/Buffered, seek it to the master's current ms."""
+        target_ms = (frame_to_ms(self._last_frame_idx, self._fps)
+                     if (self._fps and self._fps > 0)
+                     else (self._last_frame_ms or self.player_orig.position() or 0))
+
+        def _on_status(status):
+            if status in (getattr(QMediaPlayer, "LoadedMedia", None),
+                          getattr(QMediaPlayer, "BufferedMedia", None)):
+                follower.setPosition(target_ms)
+                # keep follower paused unless we’re actively playing
+                if self.player_orig.playbackState() == QMediaPlayer.PlayingState:
+                    follower.play()
+                else:
+                    follower.pause()
+                follower.mediaStatusChanged.disconnect(_on_status)
+
+        follower.mediaStatusChanged.connect(_on_status)
+
     # ---------- Object selection ----------
     def set_current_object(self, obj_id: int):
         if obj_id >= 1:
@@ -507,12 +591,14 @@ class VideoPlayer(QWidget):
         if self._infill_preview_frames is not None:
             self.clear_infill_preview()
         self.player_infill.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
+        self._seek_player_to_current_when_loaded(self.player_infill)
 
     def load_mask(self, path: str):
         # If a RAM preview exists, clear it so file-backed mask takes over.
         if self._mask_preview_frames is not None:
             self.clear_mask_preview()
         self.mask_player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
+        self._seek_player_to_current_when_loaded(self.mask_player)
 
     # ---------- RAM preview: shared utilities ----------
     def _np_to_qpixmap(self, arr: np.ndarray) -> QPixmap:
@@ -781,7 +867,11 @@ class VideoPlayer(QWidget):
 
     # ---------- Enforce FPS on media load + poster frame ----------
     def _on_master_media_status(self, status):
-        from PySide6.QtMultimedia import QMediaPlayer
+
+        if status == QMediaPlayer.EndOfMedia:
+            self.pause_all()   # make sure followers pause too
+            self.seek(0)       # jump to frame 0 / 00:00
+            return
         if self._poster_ready: return
         if status in (getattr(QMediaPlayer, "LoadedMedia", None),
                       getattr(QMediaPlayer, "BufferedMedia", None)):
@@ -803,7 +893,6 @@ class VideoPlayer(QWidget):
                 QTimer.singleShot(0, self._show_first_master_frame)
 
     def _show_first_master_frame(self):
-        from PySide6.QtMultimedia import QMediaPlayer
         if self.player_orig.playbackState() == QMediaPlayer.PlayingState:
             self._poster_ready = True; return
         try:
@@ -1075,6 +1164,25 @@ class SideDock(QDockWidget):
         mk_lay.addWidget(self.cb_show_mask); mk_lay.addLayout(op_row)
         lay.addWidget(mask_group)
 
+        # Infill resolution
+        infill_group = QGroupBox("Infill Settings")
+        infill_lay = QHBoxLayout(infill_group)
+        infill_lay.addWidget(QLabel("Resolution:"))
+        self.infill_resolution = QSpinBox()
+        self.infill_resolution.setRange(64, 4096)  # sensible bounds
+        self.infill_resolution.setSingleStep(64)
+        self.infill_resolution.setValue(960)       # default
+        infill_lay.addWidget(self.infill_resolution)
+
+        # Mask dilation
+        dilation_group = QGroupBox("Mask Settings")
+        infill_lay.addWidget(QLabel("Dilation:"))
+        self.mask_dilation = QSpinBox()
+        self.mask_dilation.setRange(0, 25)         # 0–25
+        self.mask_dilation.setValue(8)             # default
+        infill_lay.addWidget(self.mask_dilation)
+        lay.addWidget(infill_group)
+
         # --- compact action rows with preview buttons ---
         lay.addStretch(1)
 
@@ -1172,6 +1280,46 @@ class MainWindow(QMainWindow):
             self.infilled_video_path = Path(infilled_video)
             self.player_widget.load_infilled(infilled_video)
 
+    @Slot(str)
+    def _on_job_failed(self, err_text):
+        QMessageBox.critical(self, "Error", err_text)
+        self.prog_wind.close()
+
+    @Slot(object)
+    def _on_job_finished(self, res):
+        self.prog_wind.close()
+        self.on_done(res)
+
+    def run_with_progress(self, title: str, job_func, on_done, can_cancel=True):
+        """
+        job_func(report, is_canceled) -> result
+          - report(int_pct, str_status)
+          - is_canceled() -> bool
+        on_done(result) called on success (GUI thread).
+        """
+        dlg = ProgressDialog(title, parent=self, can_cancel=can_cancel)
+        dlg.setWindowModality(Qt.ApplicationModal)
+        self.prog_wind = dlg
+        self.on_done = on_done
+        worker = Worker()
+        self.worker = worker
+        worker.func = job_func
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        # Wire signals
+        worker.progress.connect(lambda pct, text: (dlg.set_progress(pct), dlg.set_status(text or dlg.status_label.text())))
+        worker.finished.connect(self._on_job_finished, Qt.QueuedConnection)
+        worker.failed.connect(self._on_job_failed, Qt.QueuedConnection)
+        if can_cancel and dlg.btn_cancel:
+            dlg.canceled.connect(worker.request_cancel)
+
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+
+        dlg.show()
+        thread.start()
+
     def _annotations_dict_for_frames(self, frame_indices: list[int] | None = None) -> dict:
         """
         Build the annotations dict expected by masker:
@@ -1216,60 +1364,141 @@ class MainWindow(QMainWindow):
    
     # Stubs for processing
     def generate_mask(self):
-        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=0, max_frames=-1)
-        H0, W0 = frames[0].shape[:2]
-        annotations = self._annotations_dict_for_frames(None)
-        mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+        def job(report, is_canceled):
+            report(2, "Loading original frames…")
+            frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=0, max_frames=-1)
 
-        out_video = str(self.current_video_path) + "_generated_mask.mkv"
-        tools.write_video_frames_to_path(out_video, mask_frames, fps, H0, W0)
-        self.mask_video_path = Path(out_video)
-        self.player_widget.load_mask(out_video)
-        self.player_widget.set_mask_visible(True)
-        QMessageBox.information(self, "Mask generated", "The mask video file: "+out_video+" generated")
+            if is_canceled(): return None
+            H0, W0 = frames[0].shape[:2]
+            annotations = self._annotations_dict_for_frames(None)
+
+            # If your masker supports callbacks per frame/chunk, forward them here:
+            done = [0]
+            total = len(frames) if frames else 1
+            def sam_progress(i, txt="Running SAM2…"):
+                # i = processed frames (0..total)
+                pct = int(5 + 80 * (i / max(1, total)))
+                report(pct, txt)
+
+            report(5, "Running SAM2 on frames…")
+            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+
+            if is_canceled(): return None
+            report(90, "Writing mask video…")
+            out_video = str(self.current_video_path) + "_generated_mask.mkv"
+            tools.write_video_frames_to_path(out_video, mask_frames, fps, H0, W0)
+
+            return {"out": out_video}
+
+        def on_done(res):
+            if not res:  # canceled
+                return
+            out_video = res["out"]
+            self.mask_video_path = Path(out_video)
+            self.player_widget.load_mask(out_video)
+            self.tools.cb_show_mask.setChecked(True)
+            self.player_widget.set_mask_visible(True)
+            QMessageBox.information(self, "Mask generated", f"The mask video file:\n{out_video}\nwas generated.")
+
+        self.run_with_progress("Generating Mask…", job, on_done)
+
 
     def make_vanish(self):
-        frames, fps = tools.load_video_frames_from_path(self.current_video_path)
-        H0, W0 = frames[0].shape[:2]
-        mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path))
+        infill_res = self.tools.infill_resolution.value()
+        dilate     = self.tools.mask_dilation.value()
+        def job(report, is_canceled):
+            report(2, "Loading frames…")
+            frames, fps = tools.load_video_frames_from_path(self.current_video_path)
+            if is_canceled(): return None
 
-        print("generating infill, please wait...")
-        infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames)
-        out_video = str(self.current_video_path) + "_vanished.mkv"
-        tools.write_video_frames_to_path(out_video, infill_frames, fps, H0, W0)
-        print("generated infill")
-        QMessageBox.information(self, "Infill generated", "The infilled video file: "+out_video+" generated")
+            H0, W0 = frames[0].shape[:2]
+            report(10, "Loading mask frames…")
+            mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path))
+            if is_canceled(): return None
 
-        self.infilled_video_path = Path(out_video)
-        self.player_widget.load_infilled(out_video)
-        self.tools.rb_infilled.setChecked(True)
-        self.set_mode("infilled")
+            def infill_progress(i, total=None, txt="Infilling…"):
+                if total:
+                    pct = 10 + int(80 * (i / max(1, total)))
+                else:
+                    pct = min(95, 10 + i)  # fallback
+                report(pct, txt)
+
+            report(15, "Running infill…")
+            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res)
+            if is_canceled(): return None
+
+            report(95, "Writing infilled video…")
+            out_video = str(self.current_video_path) + "_vanished.mkv"
+            tools.write_video_frames_to_path(out_video, infill_frames, fps, H0, W0)
+
+            return {"out": out_video}
+
+        def on_done(res):
+            if not res:  # canceled
+                return
+            out_video = res["out"]
+            self.infilled_video_path = Path(out_video)
+            self.player_widget.load_infilled(out_video)
+            self.tools.rb_infilled.setChecked(True)
+            self.set_mode("infilled")
+            QMessageBox.information(self, "Infill generated", f"The infilled video file:\n{out_video}\nwas generated.")
+
+        self.run_with_progress("Making Vanish…", job, on_done)
+
 
     def on_preview_mask_clicked(self):
-        # TODO: trigger your RAM mask preview generation/show here
-        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
-        annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])#only do curent frame
-        if not annotations["keyframes"]:
-            QMessageBox.warning(self, "No keyframe selected", "You have to create a keyframe by adding annotations to do a preview")
-            return
-        for kf in annotations.get('keyframes', []):
-            kf['frame_idx'] = 0
-        mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
-        self.player_widget.set_mask_preview_frames(mask_frames)
+        def job(report, is_canceled):
+            report(5, "Preparing single-frame preview…")
+            frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
+            annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])
+            if not annotations["keyframes"]:
+                # Raising here will show in dialog as error
+                raise RuntimeError("No keyframe selected. Add annotations before preview.")
+            for kf in annotations.get('keyframes', []):
+                kf['frame_idx'] = 0
+
+            report(40, "Running SAM2…")
+            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+            report(95, "Finalizing…")
+            return {"mask_frames": mask_frames}
+
+        def on_done(res):
+            if not res: return
+            self.player_widget.set_mask_visible(True)
+            self.player_widget.set_mask_preview_frames(res["mask_frames"])
+
+        self.run_with_progress("Previewing Mask…", job, on_done, can_cancel=True)
 
     def on_preview_infill_clicked(self):
-        # TODO: trigger your RAM infill preview generation/show here
-        frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=22)
-        H0, W0 = frames[0].shape[:2]
-        mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=self.player_widget._last_frame_idx, max_frames=22)
+        infill_res = self.tools.infill_resolution.value()
+        dilate     = self.tools.mask_dilation.value()
+        def job(report, is_canceled):
+            cur = self.player_widget._last_frame_idx
+            N = 22
+            report(5, "Loading preview clip…")
+            frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=cur, max_frames=N)
+            H0, W0 = frames[0].shape[:2]
+            report(10, "Loading mask clip…")
+            mask_frames, _ = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=cur, max_frames=N)
 
-        infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames)
-        print("generated infill")
-        self.player_widget.set_infill_preview_frames(infill_frames)
-        self.tools.rb_infilled.setChecked(True)
-        self.set_mode("infilled")
+            def infill_progress(i, total=N):
+                pct = 10 + int(80 * (i / max(1, total)))
+                report(pct, f"Infilling {i}/{total}…")
 
+            report(15, "Running infill preview…")
+            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res)
+            report(95, "Finalizing…")
+            return {"infill_frames": infill_frames}
 
+        def on_done(res):
+            if not res: return
+            self.player_widget.set_infill_preview_frames(res["infill_frames"])
+            self.tools.rb_infilled.setChecked(True)
+            self.set_mode("infilled")
+
+        self.run_with_progress("Previewing Infill…", job, on_done, can_cancel=True)
+
+    
     # Menus/toolbar
     def _make_menu(self):
         m = self.menuBar(); file_menu = m.addMenu("&File")
@@ -1350,13 +1579,16 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Open Infilled Video", "", "Video Files (*.mp4 *.mov *.mkv *.avi);;All Files (*)")
         if path:
             self.infilled_video_path = Path(path); self.player_widget.load_infilled(path)
-            if self.tools.rb_infilled.isChecked(): self.set_mode("infilled")
+            self.tools.rb_infilled.setChecked(True)
+            self.set_mode("infilled")
 
     def open_mask_video(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Mask Video", "", "Video Files (*.mp4 *.mov *.mkv *.avi);;All Files (*)")
         if path:
-            self.mask_video_path = Path(path); self.player_widget.load_mask(path)
-            if self.tools.cb_show_mask.isChecked(): self.player_widget.set_mask_visible(True)
+            self.mask_video_path = Path(path)
+            self.player_widget.load_mask(path)
+            self.tools.cb_show_mask.setChecked(True)
+            self.player_widget.set_mask_visible(True)
 
     # Mode
     def set_mode(self, mode: str):
