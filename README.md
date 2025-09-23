@@ -22,20 +22,19 @@ In short: *professional-grade AI video inpainting, without the research-paper he
 VideoVanish is intended to be a **user-friendly** tool for state-of-the-art video object removal and masking.
 
 ### Intended features
-- A simple installer that does not require the command line.  
+- [ ] A simple installer that does not require the command line.  
   - Example: a `.bat` file for Windows and a `pip install` package for Ubuntu/Debian.  
-- A basic video manipulation GUI, similar to *Topaz AI*:  
-  - Timeline underneath, video preview on top.  
-- **Not** browser-based.  
-  - Browser-based video editing is a nightmare (it can be solved, but not worth it).  
-  - Will also **not** use ComfyUI.  
-- GUI will show the selected color video with the mask video overlaid on top.  
-- In the GUI, you can select a **color video file** and a **mask video file**.  
-- If you don’t have a mask video, the GUI will let you create one using **SAM2**:  
+- [x] A basic video manipulation GUI, similar to *Topaz AI*:  
+  - [x] Timeline underneath, video preview on top.  
+- [x]  **Not** browser-based.  
+  - [x] Will also **not** use ComfyUI.  
+- [x] GUI will show the selected color video with the mask video overlaid on top.  
+- [x] In the GUI, you can select a **color video file** and a **mask video file**.  
+- [x] If you don’t have a mask video, the GUI will let you create one using **SAM2**:  
   - Left click = positive, right click = negative.  
   - Or drag a box to define an area.  
   - Then click **Generate Mask** to create the mask video.  
-- When you have both a color video and a mask video, press the **Vanish** button:  
+- [x] When you have both a color video and a mask video, press the **Vanish** button:  
   - **DiffuEraser** (or whichever model is best at the time; PRs welcome) will remove the object.  
 - Before pressing **Vanish**, you can set the **inference resolution**.  
   - Default = **LOW**.  
@@ -45,10 +44,17 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
   - Both the **SAM2 model** and the **DiffuEraser model** must be installed at install time.  
 - **Long videos**:  
   - Must be split into chunks with overlapping frames to maintain temporal consistency.  
-  - Overlaps will be blended during stitching.  
-- **Command line support**:  
+  - Overlaps will be blended during stitching.  (EDIT: this may be imposible to achive in a satifactory way)
+- [x] **Command line support**:  
   - All actions should also be available from the CLI.  
   - Example:  
     ```bash
     videovanish --color_video some_file.mkv --mask_video some_mask.mkv
     ```
+### TODO:
+ - IN GUI: Add loading screen indicating when ML models are working.
+ - IN GUI: Add way to apply mask dilation.
+ - IN GUI: Add way to select infill resolution.
+ - IN infill engine: add feature to ignore non infilled areas and keep them at original resolution.
+ - INSTALLER: Make installer work on windows.
+ - USER EXPERIENCE: Make youtube video tutorial
