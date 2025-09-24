@@ -1,63 +1,72 @@
+# VideoVanish
+
 ## Why VideoVanish?
 Video object removal is one of the most powerful yet frustrating AI workflows today.  
-Most existing solutions are:
-- **Cloud-based** → slow uploads, privacy concerns, and limits on video length.  
-- **Research demos** → amazing results, but painful to install, run, or scale beyond short clips.  
-- **Image-only tools** → great for photos, but useless for long videos (flicker, no temporal consistency).  
 
-**VideoVanish** bridges this gap by providing:
-- A **local-first** workflow — no uploading, no hidden costs.  
-- A **simple installer and GUI** — no command line required.  
-- **State-of-the-art AI models** (e.g. DiffuEraser, SAM2) under the hood.  
-- Support for **long videos** with chunking, overlap and blending.
+Most existing solutions are:
+- **Cloud-based** → slow uploads, privacy concerns, video length limits.  
+- **Research demos** → impressive results, but painful to install or scale.  
+- **Image-only tools** → fine for photos, but fail on videos (flicker, no temporal consistency).  
+
+**VideoVanish** bridges this gap by offering:
+- A **local-first** workflow — no uploads, no hidden costs.  
+- A **simple installer + GUI** — no command line needed.  
+- **State-of-the-art AI models** (DiffuEraser, SAM2) built-in.  
+- Support for **long videos** with chunking, overlap, and blending.  
 - Both **GUI** for ease of use and **CLI** for automation.  
 
-In short: *professional-grade AI video inpainting, without the research-paper headaches.*
+👉 In short: *professional-grade AI video inpainting, without the research-paper headaches.*
 
 ### Screenshot
 <img alt="videovanish" src="https://github.com/user-attachments/assets/b61c700e-7eae-43a0-be1a-a62cb1de2418" />
 
-## Install
-### Windows
-1. install git https://git-scm.com/downloads/win (pick all defaults)
-2. Install miniconda https://docs.conda.io/en/latest/ (pick all defaults)
-3. Download https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip and place folder somewhere
-4. Double click windows_install.bat
-5. Double click start_videovanish.bat
+---
 
-## Plan
+## Install
+
+### Windows (GPU with plenty of VRAM recommended)
+1. Install [Git for Windows](https://git-scm.com/downloads/win) (choose all defaults).  
+2. Install [Miniconda](https://docs.conda.io/en/latest/) (choose all defaults).  
+3. [Download VideoVanish (main.zip)](https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip) and extract it anywhere.  
+4. Double-click **`windows_install.bat`**.  
+5. Double-click **`start_videovanish.bat`** to launch.  
+
+### Linux
+```bash
+git clone https://github.com/calledit/VideoVanish
+cd VideoVanish
+./install_videovanish.sh
+conda activate videovanish
+python videovanish.py
+```
+---
+
+## Project Plan
+
 VideoVanish is intended to be a **user-friendly** tool for state-of-the-art video object removal and masking.
 
-### Intended features
-- [x] A simple installer that does not require the command line.  
-  - Example: a `.bat` file for Windows and a `pip install` package for Ubuntu/Debian.  
-- [x] A basic video manipulation GUI, similar to *Topaz AI*:  
-  - [x] Timeline underneath, video preview on top.  
-- [x]  **Not** browser-based.  
-  - [x] Will also **not** use ComfyUI.  
-- [x] GUI will show the selected color video with the mask video overlaid on top.  
-- [x] In the GUI, you can select a **color video file** and a **mask video file**.  
-- [x] If you don’t have a mask video, the GUI will let you create one using **SAM2**:  
-  - Left click = add point, right click = remove point or box.  
-  - Or drag a box to define an area.  
-  - Then click **Generate Mask** to create the mask video.  
-- [x] When you have both a color video and a mask video, press the **Vanish** button:  
-  - **DiffuEraser** (or whichever model is best at the time; PRs welcome) will remove the object.  
-- [x] Before pressing **Vanish**, you can set the **inference resolution**.  
-  - Default = **LOW**.  
-  - After inpainting, the result will be rescaled to the original resolution.  
-  - The inpainted region will be sliced in and merged into a copy of the original video.  
-- [x] **Dependencies**:  
-  - Both the **SAM2 model** and the **DiffuEraser model** must be installed at install time.  
-- **Long videos**:  
-  - Must be split into chunks with overlapping frames to maintain temporal consistency.  
-  - Overlaps will be blended during stitching.  (EDIT: this may be imposible to achive in a satifactory way)
-- [x] **Command line support**:  
-  - All actions should also be available from the CLI.  
-  - Example:  
-    ```bash
-    videovanish --color_video some_file.mkv --mask_video some_mask.mkv
-    ```
-### TODO:
- - Many users think the console is anoying. Make sure videovanish can be booted without a visible console window. But to see status of the wheights beeing downloaded we need the console. Either make a inline console window or predownload weights and make GUI for that.
- - USER EXPERIENCE: Make youtube video tutorial
+### Current Features
+- [x] Simple installer, no command line required.  
+- [x] Basic GUI for video editing (timeline + preview).  
+- [x] **Not** browser-based, and does **not** use ComfyUI.  
+- [x] Load **color video** + optional **mask video**.  
+- [x] If no mask video, create one in GUI using **SAM2**:  
+  - Left click = add point  
+  - Right click = remove point/box  
+  - Drag = define area  
+  - Click **Generate Mask** to build mask video  
+- [x] With both color + mask, press **Vanish** → uses **DiffuEraser** to remove objects.  
+- [x] Adjustable **inference resolution** (default: low).  
+  - Result is rescaled and blended into original video.  
+- [x] Dependencies (SAM2 + DiffuEraser models) installed automatically.  
+- [x] **Command-line support** for automation.  
+
+---
+
+## TODO / Roadmap
+- Hide console window on startup (many users find it annoying).  
+  - Keep a way to view weight download progress (inline console window or GUI download manager).  
+- Improve **user experience**: create a YouTube video tutorial.
+- Split videos into chunks with overlapping frames to reduce vram requirements.  Overlaps should be blended during stitching. ⚠️ Perfect blending may not always be possible.  
+
+---
