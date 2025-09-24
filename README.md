@@ -17,12 +17,19 @@ In short: *professional-grade AI video inpainting, without the research-paper he
 ### Screenshot
 <img alt="videovanish" src="https://github.com/user-attachments/assets/b61c700e-7eae-43a0-be1a-a62cb1de2418" />
 
+## Install
+### Windows
+1. install git https://git-scm.com/downloads/win (pick all defaults)
+2. Install miniconda https://docs.conda.io/en/latest/ (pick all defaults)
+3. Download https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip and place folder somewhere
+4. Double click windows_install.bat
+5. Double click start_videovanish.bat
 
 ## Plan
 VideoVanish is intended to be a **user-friendly** tool for state-of-the-art video object removal and masking.
 
 ### Intended features
-- [ ] A simple installer that does not require the command line.  
+- [x] A simple installer that does not require the command line.  
   - Example: a `.bat` file for Windows and a `pip install` package for Ubuntu/Debian.  
 - [x] A basic video manipulation GUI, similar to *Topaz AI*:  
   - [x] Timeline underneath, video preview on top.  
@@ -31,16 +38,16 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
 - [x] GUI will show the selected color video with the mask video overlaid on top.  
 - [x] In the GUI, you can select a **color video file** and a **mask video file**.  
 - [x] If you don’t have a mask video, the GUI will let you create one using **SAM2**:  
-  - Left click = positive, right click = negative.  
+  - Left click = add point, right click = remove point or box.  
   - Or drag a box to define an area.  
   - Then click **Generate Mask** to create the mask video.  
 - [x] When you have both a color video and a mask video, press the **Vanish** button:  
   - **DiffuEraser** (or whichever model is best at the time; PRs welcome) will remove the object.  
-- Before pressing **Vanish**, you can set the **inference resolution**.  
+- [x] Before pressing **Vanish**, you can set the **inference resolution**.  
   - Default = **LOW**.  
   - After inpainting, the result will be rescaled to the original resolution.  
   - The inpainted region will be sliced in and merged into a copy of the original video.  
-- **Dependencies**:  
+- [x] **Dependencies**:  
   - Both the **SAM2 model** and the **DiffuEraser model** must be installed at install time.  
 - **Long videos**:  
   - Must be split into chunks with overlapping frames to maintain temporal consistency.  
@@ -52,5 +59,5 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
     videovanish --color_video some_file.mkv --mask_video some_mask.mkv
     ```
 ### TODO:
- - INSTALLER: Make installer work on windows.
+ - Many users think the console is anoying. Make sure videovanish can be booted without a visible console window. But to see status of the wheights beeing downloaded we need the console. Either make a inline console window or predownload weights and make GUI for that.
  - USER EXPERIENCE: Make youtube video tutorial
