@@ -40,6 +40,9 @@ python videovanish.py
 ```
 ---
 
+## Tutorial
+https://youtu.be/GMFwWv1zrVM
+
 ## Project Plan
 
 VideoVanish is intended to be a **user-friendly** tool for state-of-the-art video object removal and masking.
