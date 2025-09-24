@@ -19,7 +19,7 @@ pip install -e .
 cd checkpoints
 curl -O https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 cd ..
-cd..
+cd ..
 
 git clone https://github.com/calledit/DiffuEraser_np_array
 pip install einops diffusers==0.29.2 transformers scipy matplotlib accelerate peft
