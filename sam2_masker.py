@@ -40,7 +40,7 @@ def color_for_obj(obj_id):
 # =============================
 # Library API
 # =============================
-def run_sam2_on_frames(frames_rgb, annotations, device=None):
+def run_sam2_on_frames(frames_rgb, annotations, device=None, prog = None):
     """
     Run SAM2 segmentation on a list of frames, then return COLORED mask frames
     (black background; each obj_id rendered in its own solid color).
@@ -62,6 +62,7 @@ def run_sam2_on_frames(frames_rgb, annotations, device=None):
     assert isinstance(frames_rgb, (list, tuple)) and len(frames_rgb) > 0, "frames must be a non-empty list"
     H0, W0 = frames_rgb[0].shape[:2]
 
+    if prog is not None: prog(1, "Setting up sam2")
     # Select device
     if device is None:
         if torch.cuda.is_available():
@@ -81,6 +82,8 @@ def run_sam2_on_frames(frames_rgb, annotations, device=None):
 
     if predictor is None:
         predictor = build_sam2_video_predictor(SAM2_MODEL_CFG, SAM2_CHECKPOINT, device=device)
+
+    if prog is not None: prog(25, "Loading frames in to sam2")
 
     # SAM2 examples load RGB via decord; convert BGR->RGB for the model to be safe
     inference_state = predictor.init_state(video_path=frames_rgb)
@@ -134,6 +137,7 @@ def run_sam2_on_frames(frames_rgb, annotations, device=None):
                 box=box,
             )
 
+    if prog is not None: prog(45, "Infering masks with sam2")
     # ----- propagate and collect per-frame masks -----
     video_segments = {}  # {frame_idx: {obj_id: mask_bool[h,w]}}
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
@@ -142,6 +146,7 @@ def run_sam2_on_frames(frames_rgb, annotations, device=None):
             for i, out_obj_id in enumerate(out_obj_ids)
         }
 
+    if prog is not None: prog(80, "Creating color mask from sam2 data")
     # ----- build COLORED mask frames -----
     mask_frames = []
     for idx in range(len(frames_rgb)):

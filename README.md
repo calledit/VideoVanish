@@ -52,9 +52,5 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
     videovanish --color_video some_file.mkv --mask_video some_mask.mkv
     ```
 ### TODO:
- - IN GUI: Add loading screen indicating when ML models are working.
- - IN GUI: Add way to apply mask dilation.
- - IN GUI: Add way to select infill resolution.
- - IN infill engine: add feature to ignore non infilled areas and keep them at original resolution.
  - INSTALLER: Make installer work on windows.
  - USER EXPERIENCE: Make youtube video tutorial

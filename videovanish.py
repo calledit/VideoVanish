@@ -1164,23 +1164,38 @@ class SideDock(QDockWidget):
         mk_lay.addWidget(self.cb_show_mask); mk_lay.addLayout(op_row)
         lay.addWidget(mask_group)
 
-        # Infill resolution
+        # Infill settings group
         infill_group = QGroupBox("Infill Settings")
-        infill_lay = QHBoxLayout(infill_group)
-        infill_lay.addWidget(QLabel("Resolution:"))
-        self.infill_resolution = QSpinBox()
-        self.infill_resolution.setRange(64, 4096)  # sensible bounds
-        self.infill_resolution.setSingleStep(64)
-        self.infill_resolution.setValue(960)       # default
-        infill_lay.addWidget(self.infill_resolution)
+        infill_lay = QVBoxLayout(infill_group)
 
-        # Mask dilation
-        dilation_group = QGroupBox("Mask Settings")
-        infill_lay.addWidget(QLabel("Dilation:"))
+        # --- Row 1: Resolution + Dilation
+        row_top = QHBoxLayout()
+
+        row_top.addWidget(QLabel("Resolution:"))
+        self.infill_resolution = QSpinBox()
+        self.infill_resolution.setRange(64, 4096)
+        self.infill_resolution.setSingleStep(64)
+        self.infill_resolution.setValue(960)
+        row_top.addWidget(self.infill_resolution)
+
+        row_top.addSpacing(12)  # little gap between the two
+
+        row_top.addWidget(QLabel("Dilation:"))
         self.mask_dilation = QSpinBox()
-        self.mask_dilation.setRange(0, 25)         # 0–25
-        self.mask_dilation.setValue(8)             # default
-        infill_lay.addWidget(self.mask_dilation)
+        self.mask_dilation.setRange(0, 25)
+        self.mask_dilation.setValue(8)
+        row_top.addWidget(self.mask_dilation)
+
+        infill_lay.addLayout(row_top)
+
+        # --- Row 2: Preserve unmasked
+        row_bottom = QHBoxLayout()
+        self.preserve_unmasked = QCheckBox("Preserve unmasked resolution")
+        self.preserve_unmasked.setChecked(True)
+        row_bottom.addWidget(self.preserve_unmasked)
+        infill_lay.addLayout(row_bottom)
+
+        # Add group to the dock's main layout
         lay.addWidget(infill_group)
 
         # --- compact action rows with preview buttons ---
@@ -1376,12 +1391,11 @@ class MainWindow(QMainWindow):
             done = [0]
             total = len(frames) if frames else 1
             def sam_progress(i, txt="Running SAM2…"):
-                # i = processed frames (0..total)
-                pct = int(5 + 80 * (i / max(1, total)))
+                pct = int(5 + 80 * (i / max(1, 100)))
                 report(pct, txt)
 
             report(5, "Running SAM2 on frames…")
-            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations, prog = sam_progress)
 
             if is_canceled(): return None
             report(90, "Writing mask video…")
@@ -1406,6 +1420,7 @@ class MainWindow(QMainWindow):
     def make_vanish(self):
         infill_res = self.tools.infill_resolution.value()
         dilate     = self.tools.mask_dilation.value()
+        preserve_res = self.tools.preserve_unmasked.isChecked()
         def job(report, is_canceled):
             report(2, "Loading frames…")
             frames, fps = tools.load_video_frames_from_path(self.current_video_path)
@@ -1424,7 +1439,12 @@ class MainWindow(QMainWindow):
                 report(pct, txt)
 
             report(15, "Running infill…")
-            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res)
+            def infill_progress(i, info_str = None):
+                pct = 10 + int(80 * (i / max(1, 100)))
+                if info_str is None:
+                    info_str = f"Infilling {i}/{total}"
+                report(pct, info_str)
+            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res, keep_unmasked_original = preserve_res, prog = infill_progress)
             if is_canceled(): return None
 
             report(95, "Writing infilled video…")
@@ -1458,7 +1478,10 @@ class MainWindow(QMainWindow):
                 kf['frame_idx'] = 0
 
             report(40, "Running SAM2…")
-            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations)
+            def sam_progress(i, txt="Running SAM2…"):
+                pct = int(5 + 80 * (i / max(1, 100)))
+                report(pct, txt)
+            mask_frames = sam2_masker.run_sam2_on_frames(frames, annotations, prog = sam_progress)
             report(95, "Finalizing…")
             return {"mask_frames": mask_frames}
 
@@ -1472,6 +1495,7 @@ class MainWindow(QMainWindow):
     def on_preview_infill_clicked(self):
         infill_res = self.tools.infill_resolution.value()
         dilate     = self.tools.mask_dilation.value()
+        preserve_res = self.tools.preserve_unmasked.isChecked()
         def job(report, is_canceled):
             cur = self.player_widget._last_frame_idx
             N = 22
@@ -1481,12 +1505,14 @@ class MainWindow(QMainWindow):
             report(10, "Loading mask clip…")
             mask_frames, _ = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=cur, max_frames=N)
 
-            def infill_progress(i, total=N):
-                pct = 10 + int(80 * (i / max(1, total)))
-                report(pct, f"Infilling {i}/{total}…")
+            def infill_progress(i, info_str = None):
+                pct = 10 + int(80 * (i / max(1, 100)))
+                if info_str is None:
+                    info_str = f"Infilling {i}/{total}"
+                report(pct, info_str)
 
             report(15, "Running infill preview…")
-            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res)
+            infill_frames = diffuerase.run_infill_on_frames(frames, mask_frames, mask_dilation_iter = dilate, max_img_size = infill_res, keep_unmasked_original = preserve_res, prog = infill_progress)
             report(95, "Finalizing…")
             return {"infill_frames": infill_frames}
 
