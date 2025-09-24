@@ -389,55 +389,92 @@ class VideoView(QGraphicsView):
 
     # Thumbnails (draw overlay annotations)
     def _draw_annotations_on_pixmap(self, pix: QPixmap, kf: Optional[Keyframe]) -> QPixmap:
-        if pix.isNull() or not kf: return pix
-        p = QPainter(pix); p.setRenderHint(QPainter.Antialiasing, True)
-
-        # label style
-        font = QFont(); font.setPointSize(8)
-        outline_pen = QPen(QColor(0,0,0,220), 2)
-        text_color = QColor(255,255,255,230)
+        # Early outs BEFORE creating a painter
+        if pix.isNull() or not kf:
+            return pix
 
         rect = self.overlay_item.boundingRect()
-        vw = self.viewport().width(); vh = self.viewport().height()
-        if vw <= 0 or vh <= 0: return pix
-        sx = pix.width() / vw; sy = pix.height() / vh
+        vw = self.viewport().width()
+        vh = self.viewport().height()
+        if vw <= 0 or vh <= 0:
+            return pix
 
-        # Rectangles
-        p.setPen(QPen(QColor(0, 200, 255, 220), 2)); p.setBrush(Qt.NoBrush)
-        for (nx, ny, nw, nh, obj) in kf.rects:
-            x = (rect.left() + nx * rect.width()) * sx
-            y = (rect.top()  + ny * rect.height()) * sy
-            w = (nw * rect.width()) * sx; h = (nh * rect.height()) * sy
-            p.drawRect(QRectF(x, y, w, h))
-            p.setFont(font); p.setPen(outline_pen); p.drawText(x + w + 3, y + 10, f"{obj}")
-            p.setPen(text_color); p.drawText(x + w + 2, y + 9, f"{obj}")
+        sx = pix.width() / vw
+        sy = pix.height() / vh
 
-        # Dots
-        r_px = 5.0; p.setPen(Qt.NoPen)
-        p.setBrush(QColor(55, 200, 90, 235))
-        for (nx, ny, obj) in kf.pos_clicks:
-            x = (rect.left() + nx * rect.width()) * sx
-            y = (rect.top()  + ny * rect.height()) * sy
-            p.drawEllipse(QPointF(x, y), r_px, r_px)
-            p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
-            p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+        p = QPainter(pix)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, True)
 
-        p.setBrush(QColor(230, 70, 70, 235))
-        for (nx, ny, obj) in kf.neg_clicks:
-            x = (rect.left() + nx * rect.width()) * sx
-            y = (rect.top()  + ny * rect.height()) * sy
-            p.drawEllipse(QPointF(x, y), r_px, r_px)
-            p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
-            p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+            # label style
+            font = QFont(); font.setPointSize(8)
+            outline_pen = QPen(QColor(0,0,0,220), 2)
+            text_color  = QColor(255,255,255,230)
 
-        p.end(); return pix
+            # Rectangles
+            p.setPen(QPen(QColor(0, 200, 255, 220), 2)); p.setBrush(Qt.NoBrush)
+            for (nx, ny, nw, nh, obj) in kf.rects:
+                x = (rect.left() + nx * rect.width()) * sx
+                y = (rect.top()  + ny * rect.height()) * sy
+                w = (nw * rect.width()) * sx; h = (nh * rect.height()) * sy
+                p.drawRect(QRectF(x, y, w, h))
+                p.setFont(font); p.setPen(outline_pen); p.drawText(x + w + 3, y + 10, f"{obj}")
+                p.setPen(text_color); p.drawText(x + w + 2, y + 9, f"{obj}")
+
+            # Dots
+            r_px = 5.0; p.setPen(Qt.NoPen)
+
+            p.setBrush(QColor(55, 200, 90, 235))
+            for (nx, ny, obj) in kf.pos_clicks:
+                x = (rect.left() + nx * rect.width()) * sx
+                y = (rect.top()  + ny * rect.height()) * sy
+                p.drawEllipse(QPointF(x, y), r_px, r_px)
+                p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
+                p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+
+            p.setBrush(QColor(230, 70, 70, 235))
+            for (nx, ny, obj) in kf.neg_clicks:
+                x = (rect.left() + nx * rect.width()) * sx
+                y = (rect.top()  + ny * rect.height()) * sy
+                p.drawEllipse(QPointF(x, y), r_px, r_px)
+                p.setFont(font); p.setPen(outline_pen); p.drawText(x + r_px + 2, y + 4, f"{obj}")
+                p.setPen(text_color); p.drawText(x + r_px + 1, y + 3, f"{obj}")
+        finally:
+            p.end()
+
+        return pix
+
+
 
     def grabThumbWithOverlay(self, kf: Optional[Keyframe], size: QSize) -> Optional[QIcon]:
-        pix: QPixmap = self.viewport().grab()
-        if pix.isNull(): return None
-        pix = self._draw_annotations_on_pixmap(pix, kf)
+        view_rect = self.viewport().rect()
+        if view_rect.isEmpty():
+            return None
+
+        # Render the scene to an offscreen image (NO QWidget painting)
+        img = QImage(view_rect.size(), QImage.Format_ARGB32_Premultiplied)
+        img.fill(QColor(18, 18, 22))
+        p = QPainter(img)
+        try:
+            # target = whole image, source = what's currently visible in the view
+            self.scene_.render(
+                p,
+                QRectF(QPointF(0, 0), img.size()),
+                self.scene_.sceneRect()
+            )
+        finally:
+            p.end()
+
+        pix = QPixmap.fromImage(img)
+
+        # If you still want to force annotations into the thumb even when hidden,
+        # draw them ON THE PIXMAP (offscreen) – but do all early-outs before painter:
+        if kf:
+            pix = self._draw_annotations_on_pixmap(pix, kf)
+
         thumb = pix.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         return QIcon(thumb)
+
 
 
 # ---------- Clickable seek slider ----------
@@ -1254,6 +1291,11 @@ class MainWindow(QMainWindow):
                  infilled_video: Optional[str] = None,
                  parent=None):
         super().__init__(parent)
+        
+        self._job_running = False
+        self.worker = None
+        self._prog_thread = None
+
         self.setWindowTitle("VideoVanish – Playing Followers + Resync (Frame Keyframes + Objects + RAM Previews)")
         self.resize(1280, 820)
 
@@ -1304,36 +1346,56 @@ class MainWindow(QMainWindow):
     def _on_job_finished(self, res):
         self.prog_wind.close()
         self.on_done(res)
+        
+    @Slot(int, str)   # optional but nice
+    def _on_worker_progress(self, pct: int, text: str):
+        self.prog_wind.set_progress(pct)
+        self.prog_wind.set_status(text or dlg.status_label.text())
 
-    def run_with_progress(self, title: str, job_func, on_done, can_cancel=True):
-        """
-        job_func(report, is_canceled) -> result
-          - report(int_pct, str_status)
-          - is_canceled() -> bool
-        on_done(result) called on success (GUI thread).
-        """
+    def run_with_progress(self, title, job_func, on_done, can_cancel=True):
+        if getattr(self, "_job_running", False):
+            QMessageBox.information(self, "Busy", "A task is already running.")
+            return
+        self._job_running = True
+
         dlg = ProgressDialog(title, parent=self, can_cancel=can_cancel)
         dlg.setWindowModality(Qt.ApplicationModal)
         self.prog_wind = dlg
         self.on_done = on_done
+
         worker = Worker()
-        self.worker = worker
         worker.func = job_func
         thread = QThread(self)
-        worker.moveToThread(thread)
+        self.worker = worker
+        self._prog_thread = thread
 
-        # Wire signals
-        worker.progress.connect(lambda pct, text: (dlg.set_progress(pct), dlg.set_status(text or dlg.status_label.text())))
+        worker.moveToThread(thread)
+        worker.progress.connect(self._on_worker_progress, Qt.QueuedConnection)
         worker.finished.connect(self._on_job_finished, Qt.QueuedConnection)
         worker.failed.connect(self._on_job_failed, Qt.QueuedConnection)
+
+        # always stop thread
+        worker.finished.connect(thread.quit, Qt.QueuedConnection)
+        worker.failed.connect(thread.quit, Qt.QueuedConnection)
         if can_cancel and dlg.btn_cancel:
             dlg.canceled.connect(worker.request_cancel)
+            dlg.canceled.connect(thread.quit, Qt.QueuedConnection)
 
         thread.started.connect(worker.run)
-        thread.finished.connect(thread.deleteLater)
 
+        def _cleanup():
+            # ensure thread is actually dead before clearing flags
+            thread.wait(3000)  # <-- important on Windows
+            worker.deleteLater()
+            thread.deleteLater()
+            self._job_running = False
+            self.worker = None
+            self._prog_thread = None
+
+        thread.finished.connect(_cleanup)
         dlg.show()
         thread.start()
+
 
     def _annotations_dict_for_frames(self, frame_indices: list[int] | None = None) -> dict:
         """
@@ -1379,13 +1441,14 @@ class MainWindow(QMainWindow):
    
     # Stubs for processing
     def generate_mask(self):
+        annotations = self._annotations_dict_for_frames(None)
         def job(report, is_canceled):
             report(2, "Loading original frames…")
             frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=0, max_frames=-1)
 
             if is_canceled(): return None
             H0, W0 = frames[0].shape[:2]
-            annotations = self._annotations_dict_for_frames(None)
+            
 
             # If your masker supports callbacks per frame/chunk, forward them here:
             done = [0]
@@ -1423,11 +1486,14 @@ class MainWindow(QMainWindow):
         preserve_res = self.tools.preserve_unmasked.isChecked()
         def job(report, is_canceled):
             report(2, "Loading frames…")
+            if self.current_video_path is None: raise RuntimeError("No color video open.")
             frames, fps = tools.load_video_frames_from_path(self.current_video_path)
             if is_canceled(): return None
+            
 
             H0, W0 = frames[0].shape[:2]
             report(10, "Loading mask frames…")
+            if self.mask_video_path is None: raise RuntimeError("No mask video open.")
             mask_frames, fps = tools.load_video_frames_from_path(str(self.mask_video_path))
             if is_canceled(): return None
 
@@ -1467,10 +1533,10 @@ class MainWindow(QMainWindow):
 
 
     def on_preview_mask_clicked(self):
+        annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])
         def job(report, is_canceled):
             report(5, "Preparing single-frame preview…")
             frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=self.player_widget._last_frame_idx, max_frames=1)
-            annotations = self._annotations_dict_for_frames([self.player_widget._last_frame_idx])
             if not annotations["keyframes"]:
                 # Raising here will show in dialog as error
                 raise RuntimeError("No keyframe selected. Add annotations before preview.")
@@ -1500,9 +1566,11 @@ class MainWindow(QMainWindow):
             cur = self.player_widget._last_frame_idx
             N = 22
             report(5, "Loading preview clip…")
+            if self.current_video_path is None: raise RuntimeError("No color video open.")
             frames, fps = tools.load_video_frames_from_path(self.current_video_path, start_frame=cur, max_frames=N)
             H0, W0 = frames[0].shape[:2]
             report(10, "Loading mask clip…")
+            if self.mask_video_path is None: raise RuntimeError("No mask video open.")
             mask_frames, _ = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=cur, max_frames=N)
 
             def infill_progress(i, info_str = None):
