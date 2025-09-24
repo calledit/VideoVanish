@@ -13,17 +13,26 @@ CALL "%UserProfile%\miniconda3\Scripts\activate.bat" videovanish
 
 CALL "%CONDA%" install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia -y
 
-git clone https://github.com/calledit/sam2_numpy_frames
-cd sam2_numpy_frames
+REM --- Download and unpack sam2_numpy_frames ---
+curl -L -o sam2.zip https://github.com/calledit/sam2_numpy_frames/archive/refs/heads/main.zip
+tar -xf sam2.zip
+rename sam2_numpy_frames-main sam2_numpy_frames
+pushd sam2_numpy_frames
+REM install requirments for sam2
 pip install -e .
-cd checkpoints
-curl -O https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
-cd ..
-cd ..
+popd
 
-git clone https://github.com/calledit/DiffuEraser_np_array
+REM Download SAM2 checkpoint
+curl -L -o sam2_numpy_frames\checkpoints\sam2.1_hiera_large.pt https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+
+REM --- Download and unpack DiffuEraser_np_array  ---
+curl -L -o de.zip https://github.com/calledit/DiffuEraser_np_array/archive/refs/heads/main.zip
+tar -xf de.zip
+rename DiffuEraser_np_array-main DiffuEraser_np_array
+
+REM install requirments for DiffuEraser
 pip install einops diffusers==0.29.2 transformers scipy matplotlib accelerate peft
 
 pip install numpy opencv-python PySide6
 
-rem do i need this? KMP_DUPLICATE_LIB_OK=TRUE
+pause
