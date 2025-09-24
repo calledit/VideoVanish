@@ -25,7 +25,7 @@ Most existing solutions are:
 ## Install
 
 ### Windows (GPU with plenty of VRAM recommended)
-1. Install [Miniconda](https://docs.conda.io/en/latest/) (choose all defaults).  
+1. Install [Miniconda](https://docs.conda.io/en/latest/) with latest [installer](https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe) (choose all defaults).  
 2. [Download VideoVanish (main.zip)](https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip) and extract it anywhere.  
 3. Double-click **`windows_install.bat`**.  
 4. Double-click **`start_videovanish.bat`** to launch.  
