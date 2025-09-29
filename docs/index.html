@@ -18,12 +18,13 @@
       --brand: #7c9cff;
       --brand-2:#9bffd0;
       --border:#222733;
-      --code-bg:#0f1220;
+      --code-bg:#1e1e1e;
+      --code-text:#f5f5f5;
       --shadow: 0 10px 30px rgba(0,0,0,.35);
       --radius: 18px;
     }
     :root.light{
-      --bg:#ffffff; --panel:#f6f7f9; --text:#0b0c0f; --muted:#404756; --brand:#3558ff; --brand-2:#10b981; --border:#e7e9ee; --code-bg:#0f1220; --shadow: 0 10px 30px rgba(0,0,0,.08);
+      --bg:#ffffff; --panel:#f6f7f9; --text:#0b0c0f; --muted:#404756; --brand:#3558ff; --brand-2:#10b981; --border:#e7e9ee; --code-bg:#f5f5f5; --code-text:#111318; --shadow: 0 10px 30px rgba(0,0,0,.08);
     }
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
@@ -54,7 +55,7 @@
     .list{padding-left:18px}
     .list li{margin:8px 0}
 
-    pre{background:var(--code-bg);padding:16px;border-radius:14px;overflow:auto;border:1px solid #1b1e2b}
+    pre{background:var(--code-bg);color:var(--code-text);padding:16px;border-radius:14px;overflow:auto;border:1px solid #1b1e2b}
     code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:13px}
     .copy{float:right;margin-top:-36px;margin-right:8px}
 
@@ -93,14 +94,14 @@
 
   <main class="container">
     <section class="hero">
-      <h1>AI Video Object Removal — Local‑first, Fast, and Simple</h1>
-      <p>VideoVanish brings professional‑grade video inpainting to your desktop with a friendly UI. Under the hood it combines <strong>DiffuEraser</strong> for diffusion‑based inpainting and <strong>SAM2</strong> for robust masking — no cloud uploads, no account, no fuss.</p>
+      <h1>AI Video Object Removal — Local-first, Fast, and Simple</h1>
+      <p>VideoVanish brings professional-grade video inpainting to your desktop with a friendly UI. Under the hood it combines <strong>DiffuEraser</strong> for diffusion-based inpainting and <strong>SAM2</strong> for robust masking — no cloud uploads, no account, no fuss.</p>
       <div class="cta">
         <a class="btn" href="https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip">⬇️ Download .zip</a>
         <a class="btn secondary" href="https://github.com/calledit/VideoVanish">⭐ View on GitHub</a>
       </div>
       <div class="badges" style="margin-top:14px">
-        <span class="pill">Local‑first</span>
+        <span class="pill">Local-first</span>
         <span class="pill">DiffuEraser + SAM2</span>
         <span class="pill">GUI &amp; CLI</span>
         <span class="pill">Windows &amp; Linux</span>
@@ -111,10 +112,10 @@
       <div class="span-7 card">
         <h2>Why VideoVanish?</h2>
         <ul class="list">
-          <li><strong>Local‑first workflow</strong> — keep your footage private and skip slow uploads and time limits.</li>
+          <li><strong>Local-first workflow</strong> — keep your footage private and skip slow uploads and time limits.</li>
           <li><strong>Simple installer + GUI</strong> — get started without touching the command line.</li>
-          <li><strong>State‑of‑the‑art models</strong> — DiffuEraser for inpainting and SAM2 for precise masks.</li>
-          <li><strong>Automation ready</strong> — command‑line options for batch jobs and pipelines.</li>
+          <li><strong>State-of-the-art models</strong> — DiffuEraser for inpainting and SAM2 for precise masks.</li>
+          <li><strong>Automation ready</strong> — command-line options for batch jobs and pipelines.</li>
         </ul>
       </div>
       <div class="span-5 card">
@@ -134,7 +135,7 @@
         <ol class="list">
           <li>Install <a href="https://docs.conda.io/en/latest/miniconda.html">Miniconda</a> (choose default options).</li>
           <li><a href="https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip">Download VideoVanish</a> and extract anywhere.</li>
-          <li>Double‑click <code>windows_install.bat</code>.</li>
+          <li>Double-click <code>windows_install.bat</code>.</li>
           <li>Launch with <code>start_videovanish.bat</code>.</li>
         </ol>
       </div>
@@ -167,11 +168,29 @@ python videovanish.py</code></pre>
       </div>
       <div class="span-6 card">
         <h2>Usage — CLI</h2>
-        <p class="muted">Full CLI docs are coming soon. The app includes sensible defaults for headless runs.</p>
-        <pre><code># Example (pseudo):
-python videovanish.py --input in.mp4 --mask mask.mp4 \
-  --out out.mp4 --resolution low --overlap 8
-</code></pre>
+        <p class="muted">Here are the main CLI entry points:</p>
+        <pre><code># Run main VideoVanish pipeline
+python videovanish.py \
+  --color_video input.mp4 \
+  --mask_video mask.mp4 \
+  --infilled_video output.mp4
+
+# Create a colored mask video with SAM2
+python sam2_masker.py \
+  --color_video input.mp4 \
+  --annotations ann.json \
+  --start_frame 0 \
+  --max_frames -1 \
+  --out mask.mkv
+
+# Run DiffuEraser to remove objects
+python diffuerase.py \
+  --color_video input.mp4 \
+  --mask_video mask.mkv \
+  --prior_video prior.mp4 \
+  --start_frame 0 \
+  --max_frames -1 \
+  --out vanished.mkv</code></pre>
       </div>
     </section>
 
@@ -189,9 +208,9 @@ python videovanish.py --input in.mp4 --mask mask.mp4 \
       <div class="span-12 card">
         <h2>FAQ</h2>
         <h3>Does VideoVanish upload my footage?</h3>
-        <p>No. VideoVanish is <strong>local‑first</strong>. Models run on your machine and assets stay with you.</p>
+        <p>No. VideoVanish is <strong>local-first</strong>. Models run on your machine and assets stay with you.</p>
         <h3>What models are used?</h3>
-        <p>DiffuEraser powers diffusion‑based inpainting; SAM2 provides high‑quality interactive segmentation for mask creation.</p>
+        <p>DiffuEraser powers diffusion-based inpainting; SAM2 provides high-quality interactive segmentation for mask creation.</p>
         <h3>Where can I report issues or request features?</h3>
         <p>Open an issue on <a href="https://github.com/calledit/VideoVanish/issues">GitHub Issues</a>.</p>
       </div>
