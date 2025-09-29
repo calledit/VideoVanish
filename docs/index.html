@@ -20,20 +20,21 @@
       --border:#222733;
       --code-bg:#1e1e1e;
       --code-text:#f5f5f5;
+      --header-bg:#1a1d25;
       --shadow: 0 10px 30px rgba(0,0,0,.35);
       --radius: 18px;
     }
     :root.light{
-      --bg:#ffffff; --panel:#f6f7f9; --text:#0b0c0f; --muted:#404756; --brand:#3558ff; --brand-2:#10b981; --border:#e7e9ee; --code-bg:#f5f5f5; --code-text:#111318; --shadow: 0 10px 30px rgba(0,0,0,.08);
+      --bg:#ffffff; --panel:#f6f7f9; --text:#0b0c0f; --muted:#404756; --brand:#3558ff; --brand-2:#10b981; --border:#e7e9ee; --code-bg:#f5f5f5; --code-text:#111318; --header-bg:#ffffff; --shadow: 0 10px 30px rgba(0,0,0,.08);
     }
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
     a{color:var(--brand);text-decoration:none}
     a:hover{text-decoration:underline}
     .container{max-width:1100px;margin:0 auto;padding:28px}
-    header{position:sticky;top:0;background:linear-gradient(180deg,rgba(11,12,15,.98),rgba(11,12,15,.92));backdrop-filter:saturate(160%) blur(8px);border-bottom:1px solid var(--border);z-index:5}
+    header{position:sticky;top:0;background:var(--header-bg);backdrop-filter:saturate(160%) blur(8px);border-bottom:1px solid var(--border);z-index:5}
     header .bar{display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .logo{display:flex;align-items:center;gap:12px;font-weight:700}
+    .logo{display:flex;align-items:center;gap:12px;font-weight:700;color:var(--text)}
     .logo-icon{width:28px;height:28px;border-radius:8px;background:radial-gradient(120px 120px at 30% 30%, var(--brand) 0 40%, transparent 41%),radial-gradient(120px 120px at 70% 70%, var(--brand-2) 0 40%, transparent 41%),linear-gradient(145deg,#22293a,#0c0f17);box-shadow:var(--shadow)}
     nav a{margin:0 10px;color:var(--muted)}
     .btn{display:inline-flex;align-items:center;gap:10px;padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:#121521;color:#fff;font-weight:600;box-shadow:var(--shadow)}
@@ -80,7 +81,7 @@
 <body>
   <header>
     <div class="container bar">
-      <div class="logo"><div class="logo-icon" aria-hidden="true"></div> VideoVanish</div>
+      <div class="logo"><div class="logo-icon" aria-hidden="true"></div> <span>VideoVanish</span></div>
       <nav>
         <a href="#why">Why</a>
         <a href="#install">Install</a>
@@ -133,7 +134,7 @@
       <div class="span-6 card">
         <h2>Install — Windows</h2>
         <ol class="list">
-          <li>Install <a href="https://docs.conda.io/en/latest/miniconda.html">Miniconda</a> (choose default options).</li>
+          <li>Install <a href="https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe">Miniconda (Windows installer)</a>.</li>
           <li><a href="https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip">Download VideoVanish</a> and extract anywhere.</li>
           <li>Double-click <code>windows_install.bat</code>.</li>
           <li>Launch with <code>start_videovanish.bat</code>.</li>
