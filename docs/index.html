@@ -9,6 +9,9 @@
   <meta property="og:description" content="Local-first, state-of-the-art video object removal with DiffuEraser + SAM2. Simple installer + GUI." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://github.com/calledit/VideoVanish" />
+  <meta property="og:image" content="logo.png" />
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="apple-touch-icon" href="logo.png" />
   <style>
     :root{
       --bg: #0b0c0f;
@@ -24,9 +27,6 @@
       --shadow: 0 10px 30px rgba(0,0,0,.35);
       --radius: 18px;
     }
-    :root.light{
-      --bg:#ffffff; --panel:#f6f7f9; --text:#0b0c0f; --muted:#404756; --brand:#3558ff; --brand-2:#10b981; --border:#e7e9ee; --code-bg:#f5f5f5; --code-text:#111318; --header-bg:#ffffff; --shadow: 0 10px 30px rgba(0,0,0,.08);
-    }
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
     a{color:var(--brand);text-decoration:none}
@@ -34,9 +34,9 @@
     .container{max-width:1100px;margin:0 auto;padding:28px}
     header{position:sticky;top:0;background:var(--header-bg);backdrop-filter:saturate(160%) blur(8px);border-bottom:1px solid var(--border);z-index:5}
     header .bar{display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .logo{display:flex;align-items:center;gap:12px;font-weight:700;color:white;}
+    .logo{display:flex;align-items:center;gap:12px;font-weight:700;color:var(--text)}
     .logo-icon{width:28px;height:28px;border-radius:8px;background:radial-gradient(120px 120px at 30% 30%, var(--brand) 0 40%, transparent 41%),radial-gradient(120px 120px at 70% 70%, var(--brand-2) 0 40%, transparent 41%),linear-gradient(145deg,#22293a,#0c0f17);box-shadow:var(--shadow)}
-    nav a{margin:0 10px;color:white}
+    nav a{margin:0 10px;color:var(--muted)}
     .btn{display:inline-flex;align-items:center;gap:10px;padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:#121521;color:#fff;font-weight:600;box-shadow:var(--shadow)}
     .btn.secondary{background:transparent;color:var(--text)}
     .btn:hover{transform:translateY(-1px)}
@@ -81,14 +81,13 @@
 <body>
   <header>
     <div class="container bar">
-      <div class="logo"><div class="logo-icon" aria-hidden="true"></div> <span>VideoVanish</span></div>
+      <div class="logo"><img class="logo-img" src="logo.png" alt="VideoVanish logo" width="40" height="40"> <span>VideoVanish</span></div>
       <nav>
         <a href="#why">Why</a>
         <a href="#install">Install</a>
         <a href="#usage">Usage</a>
         <a href="#video">Tutorial</a>
         <a href="#faq">FAQ</a>
-        <button id="themeToggle" class="btn secondary" title="Toggle theme">🌗</button>
       </nav>
     </div>
   </header>
@@ -134,7 +133,7 @@
       <div class="span-6 card">
         <h2>Install — Windows</h2>
         <ol class="list">
-          <li>Install <a href="https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe">Miniconda (Windows installer)</a>.</li>
+          <li>Install <a href="https://docs.conda.io/en/latest/" rel="nofollow">Miniconda</a> with latest <a href="https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" rel="nofollow">installer</a> (choose all defaults).</li>
           <li><a href="https://github.com/calledit/VideoVanish/archive/refs/heads/main.zip">Download VideoVanish</a> and extract anywhere.</li>
           <li>Double-click <code>windows_install.bat</code>.</li>
           <li>Launch with <code>start_videovanish.bat</code>.</li>
@@ -239,17 +238,6 @@ python diffuerase.py \
   <script>
     // Year
     document.getElementById('y').textContent = new Date().getFullYear();
-    // Theme toggle (auto prefers-color-scheme + manual)
-    const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-    if(prefersLight) document.documentElement.classList.add('light');
-    document.getElementById('themeToggle').addEventListener('click',()=>{
-      document.documentElement.classList.toggle('light');
-      const isLight = document.documentElement.classList.contains('light');
-      localStorage.setItem('vv-theme', isLight ? 'light' : 'dark');
-    });
-    const saved = localStorage.getItem('vv-theme');
-    if(saved) document.documentElement.classList.toggle('light', saved==='light');
-
     // Copy helper
     function copyBlock(id){
       const el = document.getElementById(id);
