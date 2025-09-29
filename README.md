@@ -1,4 +1,7 @@
 # VideoVanish
+<img alt="tiny corp logo" src="/docs/logo.png" width="30%" >
+
+
 
 ## Why VideoVanish?
 Video object removal is one of the most powerful yet frustrating AI workflows today.  
