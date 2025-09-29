@@ -15,7 +15,7 @@ CALL "%CONDA%" install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidi
 
 REM --- Download and unpack sam2_numpy_frames ---
 curl -L -o sam2.zip https://github.com/calledit/sam2_numpy_frames/archive/refs/heads/main.zip
-tar -xf sam2.zip
+powershell -command "Expand-Archive -Path 'sam2.zip' -DestinationPath '.' -Force"
 rename sam2_numpy_frames-main sam2_numpy_frames
 pushd sam2_numpy_frames
 REM install requirments for sam2
@@ -26,13 +26,14 @@ REM Download SAM2 checkpoint
 curl -L -o sam2_numpy_frames\checkpoints\sam2.1_hiera_large.pt https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
 REM --- Download and unpack DiffuEraser_np_array  ---
-curl -L -o de.zip https://github.com/calledit/DiffuEraser_np_array/archive/refs/heads/main.zip
-tar -xf de.zip
-rename DiffuEraser_np_array-main DiffuEraser_np_array
+curl -L -o de.zip https://github.com/calledit/DiffuEraser_np_array/archive/refs/heads/master.zip
+powershell -command "Expand-Archive -Path 'de.zip' -DestinationPath '.' -Force"
+rename DiffuEraser_np_array-master DiffuEraser_np_array
 
 REM install requirments for DiffuEraser
 pip install einops diffusers==0.29.2 transformers scipy matplotlib accelerate peft
 
 pip install numpy opencv-python PySide6
 
+echo Installation done
 pause
