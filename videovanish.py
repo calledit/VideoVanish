@@ -1748,6 +1748,7 @@ def main():
         infilled_video=args.infilled_video
     )
     win.show()
+    win.setWindowIcon(QIcon('docs/logo.png'))#Has be be after win.show for some undocumented reason
     sys.exit(app.exec())
 
 if __name__ == "__main__":
