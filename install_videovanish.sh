@@ -64,7 +64,12 @@ if [[ $INSTALL_SAM2 -eq 1 ]]; then
 	cd sam2_numpy_frames
 	pip install -e .
 	cd checkpoints
-	wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+	if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+	    wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+	elif [[ "$OSTYPE" == "darwin"* ]]; then
+	    curl -L -O https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+	fi
+	
 	cd ..
 	cd ..
 fi
