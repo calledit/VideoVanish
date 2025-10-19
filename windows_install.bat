@@ -31,7 +31,7 @@ powershell -command "Expand-Archive -Path 'de.zip' -DestinationPath '.' -Force"
 rename DiffuEraser_np_array-master DiffuEraser_np_array
 
 REM install requirments for DiffuEraser
-pip install einops>=0.8.1 diffusers==0.29.2 transformers>=4.57.1 scipy matplotlib accelerate>=1.10.1 peft>=0.17.1
+pip install --upgrade einops>=0.8.1 diffusers==0.29.2 transformers>=4.57.1 scipy matplotlib accelerate>=1.10.1 peft>=0.17.1
 
 pip install numpy opencv-python PySide6
 
