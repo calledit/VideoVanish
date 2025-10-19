@@ -1742,6 +1742,7 @@ def parse_args(argv):
 def main():
     args = parse_args(sys.argv[1:])
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     win = MainWindow(
         color_video=args.color_video,
         mask_video=args.mask_video,
