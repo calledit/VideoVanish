@@ -21,7 +21,7 @@ Most existing solutions are:
 👉 In short: *professional-grade AI video inpainting, without the research-paper headaches.*
 
 ### Screenshot
-<img alt="videovanish" src="https://github.com/user-attachments/assets/b61c700e-7eae-43a0-be1a-a62cb1de2418" />
+<img alt="videovanish" src="https://github.com/user-attachments/assets/8a47787e-b745-4a6f-8a87-3f44cea66e9a" />
 
 ---
 
@@ -63,7 +63,7 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
   - Drag = define area  
   - Click **Generate Mask** to build mask video  
 - [x] With both color + mask, press **Vanish** → uses **DiffuEraser** to remove objects.  
-- [x] Adjustable **inference resolution** (default: low).  
+- [x] Adjustable **inference resolution**.  
   - Result is rescaled and blended into original video.  
 - [x] Dependencies (SAM2 + DiffuEraser models) installed automatically.  
 - [x] **Command-line support** for automation.  
@@ -73,7 +73,6 @@ VideoVanish is intended to be a **user-friendly** tool for state-of-the-art vide
 ## TODO / Roadmap
 - Hide console window on startup (many users find it annoying).  
   - Keep a way to view weight download progress (inline console window or GUI download manager).  
-- Improve **user experience**: create a YouTube video tutorial.
 - Split videos into chunks with overlapping frames to reduce vram requirements.  Overlaps should be blended during stitching. ⚠️ Perfect blending may not always be possible.  
 
 ---
