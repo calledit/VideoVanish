@@ -52,7 +52,8 @@ def run_infill_on_frames(frames_rgb, mask_frames, mask_dilation_iter=8, ckpt="2-
         propainer_frames = propainter.forward(
             frames_rgb, dilated_mask_frames,
             ref_stride=10, neighbor_length=10, subvideo_length=50,
-            mask_dilation=0
+            mask_dilation=0,
+            progress = prog
         )
 
     if prog is not None: prog(50, "running DiffuEraser")
@@ -61,7 +62,8 @@ def run_infill_on_frames(frames_rgb, mask_frames, mask_dilation_iter=8, ckpt="2-
     inpainted_frames = video_inpainting_sd.forward(
         frames_rgb, dilated_mask_frames, propainer_frames,
         max_img_size=max_img_size, mask_dilation_iter=0,
-        guidance_scale=guidance_scale
+        guidance_scale=guidance_scale,
+        progress = prog
     )
 
     if prog is not None: prog(90, "resizing and merging finished frames")

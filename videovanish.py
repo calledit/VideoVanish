@@ -1505,8 +1505,13 @@ class MainWindow(QMainWindow):
                 report(pct, txt)
 
             report(15, "Running infill…")
-            def infill_progress(i, info_str = None):
-                pct = 10 + int(80 * (i / max(1, 100)))
+            def infill_progress(i, info_str = None, end_percent = None, tot_nr_frames = None, current_frame = None):
+                if tot_nr_frames is not None and end_percent is not None and current_frame is not None:
+                    percent_of_frames = current_frame/tot_nr_frames
+                    percent_to_fill = end_percent - i
+                    i = i + int(percent_to_fill * percent_of_frames)
+                
+                pct = 15 + int(80 * (i / max(1, 100)))
                 if info_str is None:
                     info_str = f"Infilling {i}/{total}"
                 report(pct, info_str)
@@ -1573,8 +1578,13 @@ class MainWindow(QMainWindow):
             if self.mask_video_path is None: raise RuntimeError("No mask video open.")
             mask_frames, _ = tools.load_video_frames_from_path(str(self.mask_video_path), start_frame=cur, max_frames=N)
 
-            def infill_progress(i, info_str = None):
-                pct = 10 + int(80 * (i / max(1, 100)))
+            def infill_progress(i, info_str = None, end_percent = None, tot_nr_frames = None, current_frame = None):
+                if tot_nr_frames is not None and end_percent is not None and current_frame is not None:
+                    percent_of_frames = current_frame/tot_nr_frames
+                    percent_to_fill = end_percent - i
+                    i = i + int(percent_to_fill * percent_of_frames)
+                
+                pct = 15 + int(80 * (i / max(1, 100)))
                 if info_str is None:
                     info_str = f"Infilling {i}/{total}"
                 report(pct, info_str)
