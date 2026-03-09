@@ -6,12 +6,13 @@ CALL "%CONDA%" tos accept --override-channels --channel https://repo.anaconda.co
 CALL "%CONDA%" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 CALL "%CONDA%" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/msys2
 
+CALL "%CONDA%" env remove -n videovanish
+
 CALL "%CONDA%" create -n videovanish python=3.11 -y
 CALL "%UserProfile%\miniconda3\Scripts\activate.bat" videovanish
 
 
-
-CALL "%CONDA%" install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia -y
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 REM --- Download and unpack sam2_numpy_frames ---
 curl -L -o sam2.zip https://github.com/calledit/sam2_numpy_frames/archive/refs/heads/main.zip
@@ -31,7 +32,7 @@ powershell -command "Expand-Archive -Path 'de.zip' -DestinationPath '.' -Force"
 rename DiffuEraser_np_array-master DiffuEraser_np_array
 
 REM install requirments for DiffuEraser
-pip install --upgrade einops>=0.8.1 diffusers==0.29.2 transformers>=4.57.1 scipy matplotlib accelerate>=1.10.1 peft>=0.17.1
+pip install --upgrade einops>=0.8.1 diffusers==0.29.2 transformers==4.57.6 scipy matplotlib accelerate>=1.10.1 peft>=0.17.1
 
 pip install numpy opencv-python PySide6
 
